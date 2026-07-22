@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#176B5B" />
+    <meta name="description" content="Private personal budgeting ledger" />
+    <script>
+      (() => {
+        try {
+          const preference = localStorage.getItem('ledger:theme') || 'system';
+          const dark =
+            preference === 'dark' ||
+            (preference === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          document.documentElement.dataset.themePreference = preference;
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+          document
+            .querySelector('meta[name="theme-color"]')
+            ?.setAttribute('content', dark ? '#050605' : '#176B5B');
+        } catch {
+          // Keep the light document defaults when storage or media queries are unavailable.
+        }
+      })();
+    </script>
+    <title>Personal Ledger</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
