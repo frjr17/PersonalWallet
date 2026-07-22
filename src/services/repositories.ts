@@ -80,6 +80,7 @@ export async function saveAccount(
   input: Pick<Account, 'name' | 'type' | 'currency' | 'openingBalanceMinor' | 'creditLimitMinor'>,
   id?: string,
 ) {
+  const openingBalanceMinor = input.openingBalanceMinor === 0 ? 0 : input.openingBalanceMinor;
   const ref = id ? doc(path(uid, 'accounts'), id) : doc(path(uid, 'accounts'));
   const existing = id ? await getDoc(ref) : undefined;
   if (id && (!existing || !existing.exists())) throw new Error('Account not found');
@@ -88,9 +89,11 @@ export async function saveAccount(
     if (existingData.type && existingData.type !== input.type) {
       throw new Error('Account type cannot be changed after creation.');
     }
-    const openingDelta = input.openingBalanceMinor - (existingData.openingBalanceMinor ?? 0);
+    const openingDelta = openingBalanceMinor - (existingData.openingBalanceMinor ?? 0);
     await updateDoc(ref, {
       ...input,
+      openingBalanceMinor,
+      archived: existingData.archived ?? false,
       creditLimitMinor:
         input.type === 'credit-card' && input.creditLimitMinor !== undefined
           ? input.creditLimitMinor
@@ -102,7 +105,8 @@ export async function saveAccount(
   }
   await setDoc(ref, {
     ...input,
-    currentBalanceMinor: input.openingBalanceMinor,
+    openingBalanceMinor,
+    currentBalanceMinor: openingBalanceMinor,
     archived: false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

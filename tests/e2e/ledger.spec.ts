@@ -15,6 +15,29 @@ test('login screen renders', async ({ page }) => {
   await expect(page.getByRole('button', { name: /continue with google/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /emulator owner/i })).toBeVisible();
 });
+test('a zero-opening credit card can be created and edited', async ({ page }, testInfo) => {
+  const accountName = `${testInfo.project.name} Zero card`;
+  await page.goto('/login');
+  await page.getByRole('button', { name: /emulator owner/i }).click();
+  await expect(page.getByRole('link', { name: 'Accounts' }).last()).toBeVisible();
+
+  await page.goto('/accounts');
+  await page.getByRole('button', { name: /new account/i }).click();
+  await page.getByRole('button', { name: 'Credit card' }).click();
+  await page.getByLabel('Account name').fill(accountName);
+  await page.getByRole('button', { name: 'Save account' }).click();
+  await expect(page.getByText('Account created')).toBeVisible();
+
+  const account = page.locator('article').filter({ hasText: accountName });
+  await expect(account).toBeVisible();
+  await account.getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByRole('heading', { name: 'Edit account' })).toBeVisible();
+  await page.getByLabel('Credit limit (optional)').fill('1800');
+  await page.getByRole('button', { name: 'Update account' }).click();
+
+  await expect(page.getByText('Account updated')).toBeVisible();
+  await expect(account).toContainText('Limit $1,800.00');
+});
 test('owner can manage core ledger workflows', async ({ page }, testInfo) => {
   const accountName = `${testInfo.project.name} E2E Cash`;
   const expenseName = `${testInfo.project.name} E2E groceries`;

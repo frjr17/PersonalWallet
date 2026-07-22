@@ -76,6 +76,42 @@ describe('owner-only rules', () => {
       }),
     );
   });
+  it('rejects negative zero because account balances must be encoded as integers', async () => {
+    const owner = testEnv.authenticatedContext('owner-test').firestore();
+    await assertFails(
+      setDoc(doc(owner, 'users/owner-test/accounts/negative-zero-card'), {
+        ...account,
+        type: 'credit-card',
+        openingBalanceMinor: -0,
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(owner, 'users/owner-test/accounts/integer-zero-card'), {
+        ...account,
+        type: 'credit-card',
+        openingBalanceMinor: 0,
+      }),
+    );
+  });
+  it('allows an account update to repair a missing legacy archived flag', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const legacyAccount: Omit<typeof account, 'archived'> = {
+        name: account.name,
+        type: account.type,
+        currency: account.currency,
+        openingBalanceMinor: account.openingBalanceMinor,
+        currentBalanceMinor: account.currentBalanceMinor,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      };
+      await setDoc(doc(context.firestore(), 'users/owner-test/accounts/legacy'), legacyAccount);
+    });
+    const owner = testEnv.authenticatedContext('owner-test').firestore();
+    const reference = doc(owner, 'users/owner-test/accounts/legacy');
+
+    await assertFails(updateDoc(reference, { name: 'Legacy checking' }));
+    await assertSucceeds(updateDoc(reference, { name: 'Legacy checking', archived: false }));
+  });
   it('rejects invalid money and unknown paths', async () => {
     await assertFails(
       setDoc(
