@@ -60,7 +60,7 @@ export function CategoryIcon({
   strokeWidth = 1.8,
   className,
 }: {
-  icon?: CategoryIconId | string;
+  icon?: unknown;
   size?: number;
   strokeWidth?: number;
   className?: string;

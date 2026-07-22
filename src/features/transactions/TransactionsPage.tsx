@@ -3,6 +3,7 @@ import { Copy, Edit3, Plus, Search, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
+import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { Page } from '@/components/layout/Page';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -39,7 +40,7 @@ export function TransactionsPage() {
         </Button>
       }
     >
-      <div className="card mb-5 flex flex-col gap-3 sm:flex-row">
+      <div className="mb-7 flex flex-col gap-3 border-b pb-5 sm:flex-row">
         <label className="relative flex-1">
           <span className="sr-only">Search transactions</span>
           <Search className="absolute left-3 top-3 text-ink/40" size={19} />
@@ -63,7 +64,7 @@ export function TransactionsPage() {
         </select>
       </div>
       {rows.length ? (
-        <div className="card overflow-x-auto p-0">
+        <div className="overflow-x-auto border-y">
           <table className="w-full min-w-[680px]">
             <thead>
               <tr className="border-b text-left text-xs uppercase tracking-wider opacity-50">
@@ -84,7 +85,18 @@ export function TransactionsPage() {
                     <span className="text-xs opacity-50">{t.type}</span>
                   </td>
                   <td>{accounts.find((a) => a.id === t.accountId)?.name}</td>
-                  <td>{categories.find((c) => c.id === t.categoryId)?.name ?? 'Transfer'}</td>
+                  <td>
+                    <span className="flex items-center gap-2">
+                      {t.categoryId && (
+                        <CategoryIcon
+                          icon={categories.find((c) => c.id === t.categoryId)?.icon}
+                          className="text-jade dark:text-[#67c7b5]"
+                          size={15}
+                        />
+                      )}
+                      {categories.find((c) => c.id === t.categoryId)?.name ?? 'Transfer'}
+                    </span>
+                  </td>
                   <td
                     className={`amount text-right font-semibold ${t.type === 'expense' ? 'text-apricot' : t.type === 'income' ? 'text-jade' : ''}`}
                   >

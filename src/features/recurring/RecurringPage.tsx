@@ -3,6 +3,7 @@ import { Check, Pause, Play, Plus, SkipForward, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
+import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { Page } from '@/components/layout/Page';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -139,69 +140,79 @@ export function RecurringPage() {
         </Card>
       )}
       {recurring.length ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          {recurring.map((r) => (
-            <Card key={r.id} className={!r.active ? 'opacity-60' : ''}>
-              <div className="flex justify-between">
-                <div>
-                  <p className="eyebrow">
-                    {r.frequency} · {r.type}
-                  </p>
-                  <h2 className="mt-2 font-display text-xl">{r.description}</h2>
-                  <p className="amount mt-2 text-2xl">{formatMoney(r.amountMinor, r.currency)}</p>
-                  <p className="mt-1 text-sm opacity-55">
-                    Next {format(asDate(r.nextOccurrence), 'MMM d, yyyy')}
-                  </p>
+        <div className="divide-y border-y">
+          {recurring.map((r) => {
+            const category = categories.find((item) => item.id === r.categoryId);
+            return (
+              <section key={r.id} className={`py-5 ${!r.active ? 'opacity-60' : ''}`}>
+                <div className="flex justify-between gap-4">
+                  <div className="flex min-w-0 gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center text-jade dark:text-[#67c7b5]">
+                      <CategoryIcon icon={category?.icon} size={20} />
+                    </span>
+                    <div>
+                      <p className="eyebrow">
+                        {r.frequency} · {r.type}
+                      </p>
+                      <h2 className="mt-2 font-display text-xl">{r.description}</h2>
+                      <p className="amount mt-2 text-2xl">
+                        {formatMoney(r.amountMinor, r.currency)}
+                      </p>
+                      <p className="mt-1 text-sm opacity-55">
+                        Next {format(asDate(r.nextOccurrence), 'MMM d, yyyy')}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex h-fit gap-1">
+                    <Button
+                      variant="ghost"
+                      aria-label={r.active ? 'Pause' : 'Resume'}
+                      onClick={() => user && void setRecurringActive(user.uid, r.id, !r.active)}
+                    >
+                      {r.active ? <Pause size={17} /> : <Play size={17} />}
+                    </Button>
+                    <ConfirmDialog
+                      trigger={
+                        <Button variant="ghost" aria-label="Delete">
+                          <Trash2 size={17} />
+                        </Button>
+                      }
+                      title="Delete recurring item?"
+                      description="Posted transactions remain in your ledger."
+                      onConfirm={() => (user ? deleteRecurring(user.uid, r.id) : Promise.resolve())}
+                    />
+                  </div>
                 </div>
-                <div className="flex h-fit gap-1">
-                  <Button
-                    variant="ghost"
-                    aria-label={r.active ? 'Pause' : 'Resume'}
-                    onClick={() => user && void setRecurringActive(user.uid, r.id, !r.active)}
-                  >
-                    {r.active ? <Pause size={17} /> : <Play size={17} />}
-                  </Button>
-                  <ConfirmDialog
-                    trigger={
-                      <Button variant="ghost" aria-label="Delete">
-                        <Trash2 size={17} />
-                      </Button>
-                    }
-                    title="Delete recurring item?"
-                    description="Posted transactions remain in your ledger."
-                    onConfirm={() => (user ? deleteRecurring(user.uid, r.id) : Promise.resolve())}
-                  />
-                </div>
-              </div>
-              {r.active && asDate(r.nextOccurrence) <= new Date() && (
-                <div className="mt-5 flex gap-2 border-t pt-4">
-                  <Button
-                    onClick={async () => {
-                      if (!user) return;
-                      const hash = await fingerprint(
-                        r.accountId,
-                        asDate(r.nextOccurrence),
-                        r.amountMinor,
-                        r.description,
-                      );
-                      await confirmRecurring(user.uid, r, hash);
-                      toast.success('Occurrence posted');
-                    }}
-                  >
-                    <Check size={17} />
-                    Confirm
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => user && void advanceRecurring(user.uid, r)}
-                  >
-                    <SkipForward size={17} />
-                    Skip
-                  </Button>
-                </div>
-              )}
-            </Card>
-          ))}
+                {r.active && asDate(r.nextOccurrence) <= new Date() && (
+                  <div className="mt-5 flex gap-2 border-t pt-4">
+                    <Button
+                      onClick={async () => {
+                        if (!user) return;
+                        const hash = await fingerprint(
+                          r.accountId,
+                          asDate(r.nextOccurrence),
+                          r.amountMinor,
+                          r.description,
+                        );
+                        await confirmRecurring(user.uid, r, hash);
+                        toast.success('Occurrence posted');
+                      }}
+                    >
+                      <Check size={17} />
+                      Confirm
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => user && void advanceRecurring(user.uid, r)}
+                    >
+                      <SkipForward size={17} />
+                      Skip
+                    </Button>
+                  </div>
+                )}
+              </section>
+            );
+          })}
         </div>
       ) : (
         <EmptyState

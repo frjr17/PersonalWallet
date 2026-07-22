@@ -55,11 +55,10 @@ const keys: ReadonlyArray<{
 
 const treatmentClasses = {
   digit:
-    'border bg-white/80 text-ink hover:bg-white dark:bg-[#151515] dark:text-[#f7f2e8] dark:hover:bg-[#202020]',
+    'bg-white/65 text-ink hover:bg-white dark:bg-white/[.055] dark:text-[#f7f2e8] dark:hover:bg-white/10',
   operator:
-    'border border-jade/25 bg-mist/75 text-jade hover:bg-mist dark:border-jade/45 dark:bg-jade/15 dark:text-[#7fd5c2] dark:hover:bg-jade/25',
-  utility:
-    'border border-apricot/25 bg-apricot/10 text-ink hover:bg-apricot/20 dark:border-apricot/35 dark:text-[#f7f2e8]',
+    'bg-jade/10 text-jade hover:bg-jade/15 dark:bg-jade/15 dark:text-[#7fd5c2] dark:hover:bg-jade/25',
+  utility: 'bg-apricot/10 text-ink hover:bg-apricot/20 dark:text-[#f7f2e8]',
   equals: 'bg-jade text-white hover:bg-[#125849]',
 } as const;
 
@@ -169,10 +168,10 @@ export function AmountCalculator({ value, onChange }: AmountCalculatorProps) {
     <section
       aria-label="Amount calculator"
       aria-describedby={error ? errorId : undefined}
-      className="rounded-[1.35rem] border bg-oat/55 p-3 dark:bg-black"
+      className="p-1"
       onKeyDown={handleKeyDown}
     >
-      <div className="mb-3 min-h-[5.5rem] rounded-2xl border bg-white/80 px-4 py-3 text-right focus-within:border-jade focus-within:ring-2 focus-within:ring-jade/25 dark:bg-[#0b0b0b]">
+      <div className="mb-3 min-h-[5.5rem] border-b px-2 py-3 text-right focus-within:border-jade">
         <label className="eyebrow mb-2 block" htmlFor={inputId}>
           Calculate amount
         </label>

@@ -504,7 +504,9 @@ function TypeTab({
       {type}
       <span
         className={`rounded-full px-2 py-0.5 font-mono text-[.65rem] ${
-          selected ? 'bg-mist text-ink dark:bg-white/10 dark:text-white' : 'bg-ink/5 dark:bg-white/10'
+          selected
+            ? 'bg-mist text-ink dark:bg-white/10 dark:text-white'
+            : 'bg-ink/5 dark:bg-white/10'
         }`}
       >
         {count}

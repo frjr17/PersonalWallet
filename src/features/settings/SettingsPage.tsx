@@ -13,7 +13,6 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Page } from '@/components/layout/Page';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useAuth } from '@/features/authentication/AuthProvider';
 import { useData } from '@/app/DataProvider';
@@ -57,8 +56,8 @@ export function SettingsPage() {
   };
   return (
     <Page eyebrow="Preferences and maintenance" title="Settings">
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card>
+      <div className="max-w-4xl divide-y border-y">
+        <section className="py-7">
           <h2 className="font-display text-xl">Regional settings</h2>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <Select
@@ -84,8 +83,8 @@ export function SettingsPage() {
               onChange={(theme) => void persist({ ...settings, theme })}
             />
           </div>
-        </Card>
-        <Card>
+        </section>
+        <section className="py-7">
           <h2 className="flex items-center gap-2 font-display text-xl">
             <WifiOff className="text-jade" />
             Trusted-device offline mode
@@ -116,8 +115,8 @@ export function SettingsPage() {
               location.reload();
             }}
           />
-        </Card>
-        <Card>
+        </section>
+        <section className="py-7">
           <h2 className="font-display text-xl">Balance integrity</h2>
           <p className="my-4 opacity-65">
             Compare every stored balance with its opening balance and complete transaction history.
@@ -157,8 +156,8 @@ export function SettingsPage() {
               />
             </div>
           )}
-        </Card>
-        <Card>
+        </section>
+        <section className="py-7">
           <h2 className="font-display text-xl">Data and access</h2>
           <div className="mt-5 flex flex-wrap gap-3">
             <Button asChild>
@@ -176,7 +175,7 @@ export function SettingsPage() {
             <Moon size={16} />
             App Check complements owner-only security rules.
           </p>
-        </Card>
+        </section>
       </div>
     </Page>
   );
@@ -198,7 +197,10 @@ function ThemePicker({
   return (
     <fieldset className="sm:col-span-2">
       <legend className="label">Appearance</legend>
-      <div className="grid grid-cols-3 gap-2" aria-label="Color theme">
+      <div
+        className="grid grid-cols-3 rounded-xl bg-ink/5 p-1 dark:bg-white/[.06]"
+        aria-label="Color theme"
+      >
         {themes.map(({ value: option, label, Icon }) => {
           const selected = value === option;
           return (
@@ -207,10 +209,10 @@ function ThemePicker({
               key={option}
               aria-pressed={selected}
               onClick={() => onChange(option)}
-              className={`flex h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ${
+              className={`flex h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${
                 selected
-                  ? 'border-ink bg-ink text-oat dark:border-white dark:bg-white dark:text-black'
-                  : 'bg-white/50 hover:bg-white dark:bg-white/[.04] dark:hover:bg-white/[.08]'
+                  ? 'bg-ink text-oat dark:bg-white dark:text-black'
+                  : 'text-ink/60 hover:bg-white/60 hover:text-ink dark:text-white/60 dark:hover:bg-white/[.08] dark:hover:text-white'
               }`}
             >
               <Icon size={16} aria-hidden="true" />

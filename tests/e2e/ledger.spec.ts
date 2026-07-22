@@ -27,7 +27,9 @@ test('owner can manage core ledger workflows', async ({ page }, testInfo) => {
   await page.getByRole('button', { name: /new account/i }).click();
   await page.getByLabel('Account name').fill(accountName);
   await page.getByRole('button', { name: 'Save account' }).click();
-  await expect(page.getByRole('heading', { name: accountName })).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Accounts' }).getByText(accountName, { exact: true }),
+  ).toBeVisible();
   await page.goto('/transactions/new');
   await enterAmount(page, '10.00');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
@@ -96,9 +98,17 @@ test('owner can customize categories, cards, and the black theme', async ({ page
   await page.goto('/categories');
   await page.getByRole('button', { name: /new category/i }).click();
   await page.getByLabel('Category name').fill(parentName);
+  await page.getByRole('button', { name: 'Entertainment' }).click();
   await page.getByRole('button', { name: 'Create category' }).click();
   const hierarchy = page.getByLabel('Expense category hierarchy');
   await expect(hierarchy.getByText(parentName, { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: `Edit ${parentName}` }).click();
+  await expect(page.getByRole('button', { name: 'Entertainment' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.getByRole('button', { name: 'Close category editor' }).click();
 
   await page.getByRole('button', { name: `Add subcategory to ${parentName}` }).click();
   await page.getByLabel('Category name').fill(childName);
@@ -111,10 +121,10 @@ test('owner can customize categories, cards, and the black theme', async ({ page
   await expect(hierarchy.getByText(renamedChild, { exact: true })).toBeVisible();
 
   await page.goto('/accounts');
-  const creditCard = page.locator('.card').filter({ hasText: 'Everyday card' });
+  const creditCard = page.locator('article').filter({ hasText: 'Everyday card' });
   await expect(creditCard.getByText('Amount owed')).toBeVisible();
   await expect(creditCard.getByText('Available')).toBeVisible();
-  await expect(creditCard.getByText('Limit', { exact: true })).toBeVisible();
+  await expect(creditCard).toContainText('Limit $2,500.00');
 
   await page.goto('/settings');
   await page.getByRole('button', { name: 'Dark', exact: true }).click();

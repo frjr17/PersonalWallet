@@ -12,8 +12,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { Page } from '@/components/layout/Page';
 import { useData } from '@/app/DataProvider';
 import { dashboardMetrics, budgetStatus } from '@/services/finance';
@@ -61,7 +61,7 @@ export function DashboardPage() {
         </div>
       }
     >
-      <section className="mb-6 overflow-hidden rounded-[1.7rem] bg-jade text-white shadow-card">
+      <section className="mb-9 overflow-hidden rounded-2xl bg-jade text-white">
         <div className="grid gap-px bg-white/15 sm:grid-cols-4">
           <Summary
             label="Current balance"
@@ -95,11 +95,11 @@ export function DashboardPage() {
         </div>
       </section>
       {loading ? (
-        <div className="card animate-pulse">Loading your month…</div>
+        <div className="animate-pulse border-y py-8">Loading your month…</div>
       ) : (
-        <div className="grid gap-5 xl:grid-cols-[1.15fr_.85fr]">
-          <div className="space-y-5">
-            <Card>
+        <div className="grid gap-10 xl:grid-cols-[1.15fr_.85fr]">
+          <div className="space-y-10">
+            <section className="border-t pt-5">
               <h2 className="font-display text-lg">Income and expenses</h2>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
@@ -116,18 +116,26 @@ export function DashboardPage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </Card>
-            <Card>
+            </section>
+            <section className="border-t pt-5">
               <h2 className="font-display text-lg">Recent transactions</h2>
               <div className="mt-3 divide-y">
                 {transactions.slice(0, 7).map((t) => (
                   <div key={t.id} className="flex items-center justify-between py-3">
-                    <div>
-                      <p className="font-semibold">{t.description}</p>
-                      <p className="text-sm opacity-55">
-                        {format(asDate(t.occurredAt), 'MMM d')} ·{' '}
-                        {categories.find((c) => c.id === t.categoryId)?.name ?? 'Transfer'}
-                      </p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="grid size-8 shrink-0 place-items-center text-jade dark:text-[#67c7b5]">
+                        <CategoryIcon
+                          icon={categories.find((c) => c.id === t.categoryId)?.icon}
+                          size={17}
+                        />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-semibold">{t.description}</p>
+                        <p className="text-sm opacity-55">
+                          {format(asDate(t.occurredAt), 'MMM d')} ·{' '}
+                          {categories.find((c) => c.id === t.categoryId)?.name ?? 'Transfer'}
+                        </p>
+                      </div>
                     </div>
                     <p
                       className={`amount font-semibold ${t.type === 'income' ? 'text-jade' : t.type === 'expense' ? 'text-apricot' : ''}`}
@@ -141,10 +149,10 @@ export function DashboardPage() {
                   <p className="py-8 text-center opacity-60">Add the first entry for this month.</p>
                 )}
               </div>
-            </Card>
+            </section>
           </div>
-          <div className="space-y-5">
-            <Card>
+          <div className="space-y-10">
+            <section className="border-t pt-5">
               <h2 className="font-display text-lg">Spending by category</h2>
               {byCategory.length ? (
                 <div className="h-64">
@@ -172,8 +180,8 @@ export function DashboardPage() {
               ) : (
                 <p className="py-12 text-center opacity-60">Spending will appear here.</p>
               )}
-            </Card>
-            <Card>
+            </section>
+            <section className="border-t pt-5">
               <h2 className="font-display text-lg">Budget watch</h2>
               <div className="mt-4 space-y-4">
                 {budgets.map((b) => {
@@ -183,8 +191,15 @@ export function DashboardPage() {
                   const status = budgetStatus(b, spent);
                   return (
                     <div key={b.id}>
-                      <div className="mb-1 flex justify-between text-sm">
-                        <span>{categories.find((c) => c.id === b.categoryId)?.name}</span>
+                      <div className="mb-1 flex justify-between gap-3 text-sm">
+                        <span className="flex items-center gap-2">
+                          <CategoryIcon
+                            icon={categories.find((c) => c.id === b.categoryId)?.icon}
+                            className="text-jade dark:text-[#67c7b5]"
+                            size={15}
+                          />
+                          {categories.find((c) => c.id === b.categoryId)?.name}
+                        </span>
                         <span className="amount">{Math.round(status.usage)}%</span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-mist">
@@ -198,8 +213,8 @@ export function DashboardPage() {
                 })}
                 {!budgets.length && <p className="opacity-60">No budgets set for this month.</p>}
               </div>
-            </Card>
-            <Card>
+            </section>
+            <section className="border-t pt-5">
               <h2 className="font-display text-lg">Coming up</h2>
               <div className="mt-3">
                 {recurring
@@ -216,7 +231,7 @@ export function DashboardPage() {
                     </div>
                   ))}
               </div>
-            </Card>
+            </section>
           </div>
         </div>
       )}

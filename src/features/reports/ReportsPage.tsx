@@ -11,7 +11,6 @@ import {
 } from 'recharts';
 import { Page } from '@/components/layout/Page';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { useData } from '@/app/DataProvider';
 import { asDate } from '@/lib/dates';
 import { dashboardMetrics } from '@/services/finance';
@@ -55,7 +54,7 @@ export function ReportsPage() {
         </Button>
       }
     >
-      <div className="mb-5 grid gap-4 sm:grid-cols-3">
+      <div className="mb-10 grid divide-y border-y sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <Metric label="Net cash flow" value={formatMoney(metrics.net)} />
         <Metric label="Savings rate" value={`${metrics.savingsRate}%`} />
         <Metric
@@ -63,7 +62,7 @@ export function ReportsPage() {
           value={String(transactions.filter((t) => t.type !== 'transfer').length)}
         />
       </div>
-      <Card>
+      <section className="border-t pt-6">
         <h2 className="font-display text-xl">Cash-flow path</h2>
         <p className="mt-1 text-sm opacity-55">
           Cumulative income less expenses. Transfers are excluded.
@@ -85,16 +84,16 @@ export function ReportsPage() {
             </AreaChart>
           </ResponsiveContainer>
         </div>
-      </Card>
+      </section>
     </Page>
   );
 }
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <Card>
+    <div className="px-1 py-5 sm:px-5">
       <p className="eyebrow">{label}</p>
       <p className="amount mt-3 text-3xl font-semibold">{value}</p>
-    </Card>
+    </div>
   );
 }
 void downloadJson;

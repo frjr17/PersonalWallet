@@ -4,9 +4,9 @@ import { format } from 'date-fns';
 import { ArrowDown, ArrowLeftRight, ArrowUp, Search } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { Page } from '@/components/layout/Page';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { AmountCalculator } from '@/components/forms/AmountCalculator';
 import { useData } from '@/app/DataProvider';
@@ -115,9 +115,9 @@ export function TransactionFormPage() {
   if (editing && loading) {
     return (
       <Page eyebrow="Edit entry" title="Loading transaction">
-        <Card>
+        <div className="border-y py-8">
           <p className="animate-pulse opacity-60">Opening the ledger entry…</p>
-        </Card>
+        </div>
       </Page>
     );
   }
@@ -194,12 +194,12 @@ export function TransactionFormPage() {
         type === 'transfer' ? 'Move money' : type === 'income' ? 'Record income' : 'Record expense'
       }
     >
-      <form onSubmit={submit} className="grid max-w-6xl gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-5">
-          <Card>
+      <form onSubmit={submit} className="grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="space-y-7">
+          <section className="border-b pb-7">
             <fieldset>
               <legend className="sr-only">Entry type</legend>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 border-b">
                 {typeOptions.map(({ value, label, icon: Icon, tone }) => {
                   const disabled = value === 'transfer' && (activeAccounts.length < 2 || editing);
                   return (
@@ -208,14 +208,14 @@ export function TransactionFormPage() {
                       key={value}
                       disabled={disabled}
                       aria-pressed={type === value}
-                      className={`flex min-h-14 items-center justify-center gap-2 rounded-xl border px-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                      className={`relative flex min-h-14 items-center justify-center gap-2 px-2 text-sm font-semibold transition-colors after:absolute after:inset-x-3 after:bottom-[-1px] after:h-0.5 after:scale-x-0 after:transition-transform disabled:cursor-not-allowed disabled:opacity-35 ${
                         type === value
                           ? tone === 'apricot'
-                            ? 'border-apricot bg-apricot text-ink'
+                            ? 'text-apricot after:scale-x-100 after:bg-apricot'
                             : tone === 'jade'
-                              ? 'border-jade bg-jade text-white'
-                              : 'border-ink bg-ink text-white dark:border-white dark:bg-white dark:text-black'
-                          : 'bg-white/55 hover:border-jade/50 dark:bg-white/[.04]'
+                              ? 'text-jade after:scale-x-100 after:bg-jade dark:text-[#67c7b5]'
+                              : 'text-ink after:scale-x-100 after:bg-ink dark:text-white dark:after:bg-white'
+                          : 'text-ink/55 hover:text-ink dark:text-white/55 dark:hover:text-white'
                       }`}
                       onClick={() => {
                         setValue('type', value, { shouldDirty: true, shouldValidate: true });
@@ -239,9 +239,9 @@ export function TransactionFormPage() {
                 </p>
               ) : null}
             </fieldset>
-          </Card>
+          </section>
 
-          <Card>
+          <section className="border-b pb-7">
             <FieldLabel>{type === 'transfer' ? 'From account' : 'Account'}</FieldLabel>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {activeAccounts.map((account) => (
@@ -292,10 +292,10 @@ export function TransactionFormPage() {
                 )}
               </div>
             )}
-          </Card>
+          </section>
 
           {type !== 'transfer' && (
-            <Card>
+            <section className="border-b pb-7">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <FieldLabel>Category</FieldLabel>
@@ -315,16 +315,16 @@ export function TransactionFormPage() {
                   />
                 </label>
               </div>
-              <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+              <div className="mt-4 grid max-h-72 gap-x-5 overflow-y-auto border-y pr-1 sm:grid-cols-2">
                 {categoryChoices.map(({ category, depth, path }) => (
                   <button
                     type="button"
                     key={category.id}
                     aria-pressed={categoryId === category.id}
-                    className={`min-h-12 rounded-xl border px-3 py-2 text-left transition-colors ${
+                    className={`flex min-h-14 items-center gap-3 border-b px-2 py-2 text-left transition-colors ${
                       categoryId === category.id
-                        ? 'border-jade bg-jade text-white'
-                        : 'bg-white/55 hover:border-jade/50 dark:bg-white/[.04]'
+                        ? 'bg-mist/80 text-ink dark:bg-jade/25 dark:text-white'
+                        : 'hover:bg-ink/[.035] dark:hover:bg-white/[.055]'
                     }`}
                     onClick={() =>
                       setValue('categoryId', category.id, {
@@ -334,15 +334,17 @@ export function TransactionFormPage() {
                     }
                   >
                     <span
-                      className="block font-semibold"
-                      style={{ paddingLeft: `${depth * 0.65}rem` }}
+                      className="grid size-8 shrink-0 place-items-center text-jade dark:text-[#67c7b5]"
+                      style={{ marginLeft: `${depth * 0.45}rem` }}
                     >
-                      {category.icon !== 'circle' && <span aria-hidden>{category.icon} </span>}
-                      {category.name}
+                      <CategoryIcon icon={category.icon} size={17} />
                     </span>
-                    {depth > 0 && (
-                      <span className="mt-0.5 block truncate text-xs opacity-60">{path}</span>
-                    )}
+                    <span className="min-w-0">
+                      <span className="block font-semibold">{category.name}</span>
+                      {depth > 0 && (
+                        <span className="mt-0.5 block truncate text-xs opacity-60">{path}</span>
+                      )}
+                    </span>
                   </button>
                 ))}
                 {!categoryChoices.length && (
@@ -351,10 +353,10 @@ export function TransactionFormPage() {
               </div>
               <input type="hidden" {...register('categoryId', { required: 'Choose a category' })} />
               {errors.categoryId && <FormError>{errors.categoryId.message}</FormError>}
-            </Card>
+            </section>
           )}
 
-          <Card>
+          <section>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="sm:col-span-2">
                 <FieldLabel>Description</FieldLabel>
@@ -389,11 +391,11 @@ export function TransactionFormPage() {
                 <textarea className="input min-h-24 py-3" {...register('notes')} />
               </label>
             </div>
-          </Card>
+          </section>
         </div>
 
         <div className="lg:sticky lg:top-6 lg:self-start">
-          <Card className="border-jade/25">
+          <aside className="rounded-2xl bg-ink/[.035] p-4 dark:bg-white/[.045]">
             <div className="mb-4">
               <FieldLabel>Amount</FieldLabel>
               <p className="text-sm opacity-55">Calculate here, then save the final result.</p>
@@ -422,7 +424,7 @@ export function TransactionFormPage() {
                 Cancel
               </Button>
             </div>
-          </Card>
+          </aside>
         </div>
       </form>
     </Page>
@@ -449,10 +451,10 @@ function AccountChoice({
       disabled={disabled}
       aria-label={`${context}: ${account.name}`}
       aria-pressed={selected}
-      className={`min-h-16 rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
+      className={`min-h-16 rounded-xl px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
         selected
-          ? 'border-jade bg-mist text-ink dark:bg-jade dark:text-white'
-          : 'bg-white/55 hover:border-jade/50 dark:bg-white/[.04]'
+          ? 'bg-mist text-ink ring-2 ring-jade/40 dark:bg-jade/25 dark:text-white'
+          : 'hover:bg-ink/[.035] dark:hover:bg-white/[.055]'
       }`}
       onClick={onClick}
     >

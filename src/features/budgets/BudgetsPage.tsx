@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
+import { CategoryIcon } from '@/components/categories/CategoryIcon';
 import { Page } from '@/components/layout/Page';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -96,21 +97,29 @@ export function BudgetsPage() {
         </Card>
       )}
       {budgets.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="divide-y border-y">
           {budgets.map((b) => {
             const spent = transactions
                 .filter((t) => t.type === 'expense' && t.categoryId === b.categoryId)
                 .reduce((n, t) => n + t.amountMinor, 0),
-              s = budgetStatus(b, spent);
+              s = budgetStatus(b, spent),
+              category = categories.find((c) => c.id === b.categoryId);
             return (
-              <Card key={b.id}>
-                <div className="flex justify-between">
-                  <div>
-                    <p className="eyebrow">{categories.find((c) => c.id === b.categoryId)?.name}</p>
-                    <p className="amount mt-3 text-2xl font-semibold">{formatMoney(s.remaining)}</p>
-                    <p className="text-sm opacity-55">
-                      remaining of {formatMoney(s.effectiveLimit)}
-                    </p>
+              <section key={b.id} className="py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center text-jade dark:text-[#67c7b5]">
+                      <CategoryIcon icon={category?.icon} size={20} />
+                    </span>
+                    <div>
+                      <p className="font-semibold">{category?.name ?? 'Category'}</p>
+                      <p className="amount mt-1 text-xl font-semibold">
+                        {formatMoney(s.remaining)}
+                      </p>
+                      <p className="text-sm opacity-55">
+                        remaining of {formatMoney(s.effectiveLimit)}
+                      </p>
+                    </div>
                   </div>
                   <span
                     className={`grid size-14 place-items-center rounded-full font-mono text-sm ${s.state === 'exceeded' ? 'bg-apricot' : s.state === 'warning' ? 'bg-[#f1d19b]' : 'bg-mist'}`}
@@ -118,13 +127,13 @@ export function BudgetsPage() {
                     {Math.round(s.usage)}%
                   </span>
                 </div>
-                <div className="mt-6 h-2 overflow-hidden rounded bg-mist">
+                <div className="mt-4 h-1.5 overflow-hidden rounded bg-mist">
                   <div
                     className={`h-full ${s.state === 'exceeded' ? 'bg-apricot' : 'bg-jade'}`}
                     style={{ width: `${Math.min(100, s.usage)}%` }}
                   />
                 </div>
-              </Card>
+              </section>
             );
           })}
         </div>
