@@ -21,7 +21,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { toDatetimeLocal } from '@/lib/dates';
-import { minorToInputString, parseAmountInput } from '@/lib/money';
+import { minorToInputString } from '@/lib/money';
+import { evaluateAmountExpression } from '@/lib/calculator';
+import { OUTSIDE_ACCOUNT } from '@/lib/ledger';
+import { AmountField } from '@/components/forms/AmountField';
+import { CategoryPicker } from '@/features/categories/CategoryPicker';
 import { logError, userMessage } from '@/lib/errors';
 import type { Transaction, TransactionType } from '@/types/domain';
 import { useLedger, useSettings } from '@/app/DataProvider';
@@ -37,8 +41,8 @@ import {
 const amountField = z
   .string()
   .refine(
-    (value) => (parseAmountInput(value) ?? 0) > 0,
-    'Enter an amount greater than zero, like 12.50',
+    (value) => (evaluateAmountExpression(value) ?? 0) > 0,
+    'Enter an amount greater than zero, like 12.50 or 8+4.50',
   );
 
 const entryFormSchema = z.object({
@@ -266,7 +270,7 @@ function EntryForm({
       type,
       accountId: values.accountId,
       categoryId: values.categoryId || undefined,
-      amountMinor: parseAmountInput(values.amount)!,
+      amountMinor: evaluateAmountExpression(values.amount)!,
       currency: settings.currency,
       merchant: values.merchant.trim() || undefined,
       description: values.description.trim(),
@@ -295,14 +299,11 @@ function EntryForm({
     <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4" noValidate>
       <div className="grid gap-1.5">
         <Label htmlFor="entry-amount">Amount</Label>
-        <Input
+        <AmountField
           id="entry-amount"
-          inputMode="decimal"
-          placeholder="0.00"
-          autoComplete="off"
-          className="h-12 font-mono text-2xl"
-          aria-invalid={Boolean(errors.amount)}
-          {...form.register('amount')}
+          value={form.watch('amount')}
+          onChange={(value) => form.setValue('amount', value, { shouldValidate: false })}
+          invalid={Boolean(errors.amount)}
         />
         <FieldError message={errors.amount?.message} />
       </div>
@@ -328,26 +329,13 @@ function EntryForm({
         </div>
         <div className="grid gap-1.5">
           <Label htmlFor="entry-category">Category</Label>
-          <Select
-            value={form.watch('categoryId') ?? 'none'}
-            onValueChange={(value) =>
-              form.setValue('categoryId', value === 'none' ? undefined : value)
-            }
-          >
-            <SelectTrigger id="entry-category">
-              <SelectValue placeholder="Uncategorized" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Uncategorized</SelectItem>
-              {availableCategories.map((category) => (
-                <SelectItem key={category.id} value={category.id}>
-                  {category.parentCategoryId
-                    ? `${categories.find((parent) => parent.id === category.parentCategoryId)?.name} › ${category.name}`
-                    : category.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <CategoryPicker
+            id="entry-category"
+            type={type}
+            value={form.watch('categoryId')}
+            onChange={(categoryId) => form.setValue('categoryId', categoryId)}
+            includeCategoryId={original?.categoryId}
+          />
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -369,7 +357,7 @@ function EntryForm({
         </div>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="entry-description">Description</Label>
+        <Label htmlFor="entry-description">Description (optional)</Label>
         <Input
           id="entry-description"
           autoComplete="off"
@@ -394,7 +382,8 @@ function EntryForm({
         <Label htmlFor="entry-notes">Notes (optional)</Label>
         <Textarea id="entry-notes" rows={2} {...form.register('notes')} />
       </div>
-      <div className="flex gap-2">
+      {/* Always reachable: sticks above the mobile bottom nav, at the viewport bottom on desktop. */}
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex gap-2 border-t bg-background pt-3 pb-2 md:bottom-0">
         <Button type="submit" disabled={isSubmitting} className="flex-1">
           {editing ? 'Save changes' : type === 'income' ? 'Record income' : 'Record expense'}
         </Button>
@@ -416,21 +405,36 @@ function TransferForm({
   const navigate = useNavigate();
   const ledger = useLedger();
   const { settings } = useSettings();
-  const { activeAccounts } = ledger;
+  const { accounts, activeAccounts } = ledger;
   const editing = Boolean(original);
-  const sourceLeg = legs?.find((leg) => leg.destinationAccountId);
+
+  // Reconstruct both ends from the stored legs. A single leg means the other
+  // end is outside the wallet (or belonged to a deleted account — same thing now).
+  const outgoingLeg = legs?.find((leg) => leg.destinationAccountId);
+  const incomingLeg = legs?.find((leg) => !leg.destinationAccountId);
+  const anyLeg = outgoingLeg ?? incomingLeg;
+  const knownAccount = (id?: string) =>
+    id && accounts.some((account) => account.id === id) ? id : OUTSIDE_ACCOUNT;
+  const initialSource = legs?.length
+    ? outgoingLeg
+      ? outgoingLeg.accountId
+      : OUTSIDE_ACCOUNT
+    : (activeAccounts[0]?.id ?? '');
+  const initialDestination = legs?.length
+    ? incomingLeg
+      ? incomingLeg.accountId
+      : knownAccount(outgoingLeg?.destinationAccountId)
+    : '';
 
   const form = useForm<TransferFormValues>({
     resolver: zodResolver(transferFormSchema),
     defaultValues: {
-      amount: sourceLeg ? minorToInputString(sourceLeg.amountMinor) : '',
-      sourceAccountId: sourceLeg?.accountId ?? activeAccounts[0]?.id ?? '',
-      destinationAccountId: sourceLeg?.destinationAccountId ?? '',
-      occurredAt: toDatetimeLocal(sourceLeg ? sourceLeg.occurredAt : new Date()),
-      description: sourceLeg?.description.startsWith('Transfer to ')
-        ? ''
-        : (sourceLeg?.description ?? ''),
-      notes: sourceLeg?.notes ?? '',
+      amount: anyLeg ? minorToInputString(anyLeg.amountMinor) : '',
+      sourceAccountId: initialSource,
+      destinationAccountId: initialDestination,
+      occurredAt: toDatetimeLocal(anyLeg ? anyLeg.occurredAt : new Date()),
+      description: anyLeg?.description.startsWith('Transfer ') ? '' : (anyLeg?.description ?? ''),
+      notes: anyLeg?.notes ?? '',
     },
   });
 
@@ -438,7 +442,7 @@ function TransferForm({
     const input = {
       sourceAccountId: values.sourceAccountId,
       destinationAccountId: values.destinationAccountId,
-      amountMinor: parseAmountInput(values.amount)!,
+      amountMinor: evaluateAmountExpression(values.amount)!,
       currency: settings.currency,
       description: values.description.trim() || undefined,
       notes: values.notes.trim() || undefined,
@@ -465,14 +469,11 @@ function TransferForm({
     <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4" noValidate>
       <div className="grid gap-1.5">
         <Label htmlFor="transfer-amount">Amount</Label>
-        <Input
+        <AmountField
           id="transfer-amount"
-          inputMode="decimal"
-          placeholder="0.00"
-          autoComplete="off"
-          className="h-12 font-mono text-2xl"
-          aria-invalid={Boolean(errors.amount)}
-          {...form.register('amount')}
+          value={form.watch('amount')}
+          onChange={(value) => form.setValue('amount', value, { shouldValidate: false })}
+          invalid={Boolean(errors.amount)}
         />
         <FieldError message={errors.amount?.message} />
       </div>
@@ -487,6 +488,9 @@ function TransferForm({
               <SelectValue placeholder="Source" />
             </SelectTrigger>
             <SelectContent>
+              {form.watch('destinationAccountId') !== OUTSIDE_ACCOUNT && (
+                <SelectItem value={OUTSIDE_ACCOUNT}>Outside of wallet</SelectItem>
+              )}
               {activeAccounts.map((account) => (
                 <SelectItem key={account.id} value={account.id}>
                   {account.name}
@@ -509,6 +513,9 @@ function TransferForm({
               <SelectValue placeholder="Destination" />
             </SelectTrigger>
             <SelectContent>
+              {form.watch('sourceAccountId') !== OUTSIDE_ACCOUNT && (
+                <SelectItem value={OUTSIDE_ACCOUNT}>Outside of wallet</SelectItem>
+              )}
               {activeAccounts
                 .filter((account) => account.id !== form.watch('sourceAccountId'))
                 .map((account) => (
@@ -548,7 +555,8 @@ function TransferForm({
         <Label htmlFor="transfer-notes">Notes (optional)</Label>
         <Textarea id="transfer-notes" rows={2} {...form.register('notes')} />
       </div>
-      <div className="flex gap-2">
+      {/* Always reachable: sticks above the mobile bottom nav, at the viewport bottom on desktop. */}
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex gap-2 border-t bg-background pt-3 pb-2 md:bottom-0">
         <Button type="submit" disabled={isSubmitting} className="flex-1">
           {editing ? 'Save changes' : 'Record transfer'}
         </Button>

@@ -43,25 +43,26 @@
   --chart-other: #78716c;
 }
 
+/* True black, per the owner's preference: pure #000 canvas, near-black cards. */
 .dark {
-  --background: #171412;
-  --foreground: #edeae6;
-  --card: #1f1c19;
-  --card-foreground: #edeae6;
-  --popover: #1f1c19;
-  --popover-foreground: #edeae6;
+  --background: #000000;
+  --foreground: #ececea;
+  --card: #0e0d0c;
+  --card-foreground: #ececea;
+  --popover: #12110f;
+  --popover-foreground: #ececea;
   --primary: #3fbf8f;
   --primary-foreground: #0b2a1f;
-  --secondary: #262220;
-  --secondary-foreground: #edeae6;
-  --muted: #262220;
+  --secondary: #1a1816;
+  --secondary-foreground: #ececea;
+  --muted: #1a1816;
   --muted-foreground: #a8a29e;
-  --accent: #20302a;
+  --accent: #14231c;
   --accent-foreground: #7cd8b5;
   --destructive: #f0665a;
   --destructive-foreground: #2a0e0b;
-  --border: #2e2a26;
-  --input: #3a352f;
+  --border: #24211e;
+  --input: #302c28;
   --ring: #3fbf8f;
   --income: #4cc38a;
   --expense: #f0665a;
@@ -136,6 +137,21 @@
   /* Amounts, dates and other tabular data always read as ledger entries. */
   .font-mono {
     font-variant-numeric: tabular-nums;
+  }
+  /* Native date pickers, dressed to match the ledger. */
+  input[type='date'],
+  input[type='datetime-local'] {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  input[type='date']::-webkit-calendar-picker-indicator,
+  input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  .dark input[type='date']::-webkit-calendar-picker-indicator,
+  .dark input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
   }
   @media (prefers-reduced-motion: reduce) {
     *,

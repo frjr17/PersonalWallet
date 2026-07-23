@@ -2,14 +2,19 @@ import {
   Timestamp,
   deleteField,
   doc,
+  getCountFromServer,
   getDocs,
   increment,
+  query,
   serverTimestamp,
   setDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import {
+  OUTSIDE_ACCOUNT,
+  adjustmentDelta,
   createEntryDeltas,
   createTransferDeltas,
   deleteDeltas,
@@ -170,6 +175,7 @@ export async function deleteTransaction(uid: string, txn: Transaction): Promise<
 
 // --- Transfers ---
 
+/** Either account may be OUTSIDE_ACCOUNT ("Outside of wallet"), but not both. */
 export interface TransferInput {
   sourceAccountId: string;
   destinationAccountId: string;
@@ -183,17 +189,32 @@ export interface TransferInput {
 function validateTransfer(
   ctx: LedgerContext,
   input: TransferInput,
-): { source: Account; destination: Account } {
+): { sourceName: string; destinationName: string } {
   assertPositiveAmount(input.amountMinor);
   if (input.sourceAccountId === input.destinationAccountId)
-    throw new AppError('A transfer needs two different accounts.');
+    throw new AppError('A transfer needs two different ends.');
+  const sourceOutside = input.sourceAccountId === OUTSIDE_ACCOUNT;
+  const destinationOutside = input.destinationAccountId === OUTSIDE_ACCOUNT;
   return {
-    source: requireAccount(ctx, input.sourceAccountId),
-    destination: requireAccount(ctx, input.destinationAccountId),
+    sourceName: sourceOutside
+      ? 'outside of wallet'
+      : requireAccount(ctx, input.sourceAccountId).name,
+    destinationName: destinationOutside
+      ? 'outside of wallet'
+      : requireAccount(ctx, input.destinationAccountId).name,
   };
 }
 
-function transferLegs(input: TransferInput, names: { source: string; destination: string }) {
+/**
+ * Build the stored legs. A real→real transfer stores two documents; a transfer
+ * with an outside end stores only the real account's leg:
+ * outgoing legs carry destinationAccountId, incoming legs have none.
+ */
+function transferLegs(
+  input: TransferInput,
+  names: { sourceName: string; destinationName: string },
+  source: TransactionSource = 'manual',
+) {
   const shared = {
     type: 'transfer' as const,
     amountMinor: input.amountMinor,
@@ -201,73 +222,82 @@ function transferLegs(input: TransferInput, names: { source: string; destination
     notes: input.notes,
     tags: [],
     occurredAt: input.occurredAt,
-    source: 'manual' as const,
+    source,
   };
-  return {
-    // The outgoing leg carries destinationAccountId; the incoming leg has none.
-    sourceLeg: {
+  const legs = [];
+  if (input.sourceAccountId !== OUTSIDE_ACCOUNT) {
+    legs.push({
       ...shared,
       accountId: input.sourceAccountId,
+      // may be the OUTSIDE_ACCOUNT sentinel — an outgoing leg always carries a destination marker
       destinationAccountId: input.destinationAccountId,
-      description: input.description || `Transfer to ${names.destination}`,
-    },
-    destinationLeg: {
+      description: input.description || `Transfer to ${names.destinationName}`,
+    });
+  }
+  if (input.destinationAccountId !== OUTSIDE_ACCOUNT) {
+    legs.push({
       ...shared,
       accountId: input.destinationAccountId,
-      description: input.description || `Transfer from ${names.source}`,
-    },
-  };
+      description: input.description || `Transfer from ${names.sourceName}`,
+    });
+  }
+  return legs;
 }
 
 export async function createTransfer(ctx: LedgerContext, input: TransferInput): Promise<string> {
-  const { source, destination } = validateTransfer(ctx, input);
-  const sourceRef = doc(transactionsCol(ctx.uid));
-  const destinationRef = doc(transactionsCol(ctx.uid));
-  const transferId = sourceRef.id;
-  const { sourceLeg, destinationLeg } = transferLegs(input, {
-    source: source.name,
-    destination: destination.name,
-  });
+  const names = validateTransfer(ctx, input);
+  const legs = transferLegs(input, names);
+  const transferId = doc(transactionsCol(ctx.uid)).id;
   const batch = writeBatch(db);
-  batch.set(sourceRef, transactionDocData({ ...sourceLeg, transferId }));
-  batch.set(destinationRef, transactionDocData({ ...destinationLeg, transferId }));
+  for (const leg of legs) {
+    batch.set(doc(transactionsCol(ctx.uid)), transactionDocData({ ...leg, transferId }));
+  }
   applyDeltas(batch, ctx.uid, createTransferDeltas(input));
   await batch.commit();
   return transferId;
 }
 
+/**
+ * Edit = delete the old legs and write the new shape under the same transferId,
+ * atomically. This handles every case, including outside↔account changes that
+ * alter the number of legs.
+ */
 export async function updateTransfer(
   ctx: LedgerContext,
-  legs: Transaction[],
+  oldLegs: Transaction[],
   input: TransferInput,
 ): Promise<void> {
-  const sourceLegOld = legs.find((leg) => leg.destinationAccountId);
-  const destinationLegOld = legs.find((leg) => !leg.destinationAccountId);
-  if (!sourceLegOld || !destinationLegOld) throw new AppError('This transfer is incomplete.');
-  const { source, destination } = validateTransfer(ctx, input);
-  const { sourceLeg, destinationLeg } = transferLegs(input, {
-    source: source.name,
-    destination: destination.name,
-  });
+  if (oldLegs.length === 0) throw new AppError('This transfer no longer exists.');
+  const names = validateTransfer(ctx, input);
+  const transferId = oldLegs[0]!.transferId;
   const batch = writeBatch(db);
-  for (const [legOld, legNew] of [
-    [sourceLegOld, sourceLeg],
-    [destinationLegOld, destinationLeg],
-  ] as const) {
-    batch.update(doc(transactionsCol(ctx.uid), legOld.id), {
-      accountId: legNew.accountId,
-      destinationAccountId:
-        'destinationAccountId' in legNew ? legNew.destinationAccountId : deleteField(),
-      amountMinor: legNew.amountMinor,
-      currency: legNew.currency,
-      description: legNew.description,
-      notes: legNew.notes ?? deleteField(),
-      occurredAt: Timestamp.fromDate(legNew.occurredAt),
-      updatedAt: serverTimestamp(),
-    });
+  for (const leg of oldLegs) batch.delete(doc(transactionsCol(ctx.uid), leg.id));
+  for (const leg of transferLegs(input, names)) {
+    batch.set(doc(transactionsCol(ctx.uid)), transactionDocData({ ...leg, transferId }));
   }
-  applyDeltas(batch, ctx.uid, editTransferDeltas([sourceLegOld, destinationLegOld], input));
+  applyDeltas(batch, ctx.uid, editTransferDeltas(oldLegs, input));
   await batch.commit();
+}
+
+/**
+ * "Adjust by record": bring the account to a target balance via an
+ * outside-of-wallet transfer, so the correction is a visible ledger record.
+ */
+export async function adjustAccountBalance(
+  ctx: LedgerContext,
+  account: Account,
+  targetMinor: number,
+): Promise<void> {
+  const delta = adjustmentDelta(account.currentBalanceMinor, targetMinor);
+  if (delta === 0) return;
+  await createTransfer(ctx, {
+    sourceAccountId: delta > 0 ? OUTSIDE_ACCOUNT : account.id,
+    destinationAccountId: delta > 0 ? account.id : OUTSIDE_ACCOUNT,
+    amountMinor: Math.abs(delta),
+    currency: account.currency,
+    description: 'Balance adjustment',
+    occurredAt: new Date(),
+  });
 }
 
 // --- Recurring occurrences ---
@@ -381,6 +411,42 @@ export async function importEntries(
     importedCount: rows.length,
     createdAt: serverTimestamp(),
   });
+}
+
+// --- Account deletion ---
+
+/** How many records deleting an account would remove (for the confirm dialog). */
+export async function countAccountRecords(uid: string, accountId: string): Promise<number> {
+  const snap = await getCountFromServer(
+    query(transactionsCol(uid), where('accountId', '==', accountId)),
+  );
+  return snap.data().count;
+}
+
+/**
+ * Delete an account together with its own transactions and recurring templates.
+ * Counterpart transfer legs in OTHER accounts are kept — they read as
+ * outside-of-wallet transfers from then on — so no other account's balance or
+ * history changes. Budgets are category-based and unaffected.
+ */
+export async function deleteAccount(uid: string, account: Account): Promise<void> {
+  const [txns, recurring] = await Promise.all([
+    getDocs(query(transactionsCol(uid), where('accountId', '==', account.id))),
+    getDocs(query(recurringCol(uid), where('accountId', '==', account.id))),
+  ]);
+  const refs = [...txns.docs, ...recurring.docs].map((snapshot) => snapshot.ref);
+  for (let index = 0; index < refs.length; index += MAX_BATCH_OPS) {
+    const batch = writeBatch(db);
+    for (const ref of refs.slice(index, index + MAX_BATCH_OPS)) batch.delete(ref);
+    // account doc goes in the last chunk, so a partial failure leaves it visible
+    if (index + MAX_BATCH_OPS >= refs.length) batch.delete(doc(accountsCol(uid), account.id));
+    await batch.commit();
+  }
+  if (refs.length === 0) {
+    const batch = writeBatch(db);
+    batch.delete(doc(accountsCol(uid), account.id));
+    await batch.commit();
+  }
 }
 
 // --- Balance recalculation (Settings maintenance action) ---

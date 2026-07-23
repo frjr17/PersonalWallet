@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { minorToInputString, parseSignedAmountInput } from '@/lib/money';
+import { minorToInputString, parseAmountInput, parseSignedAmountInput } from '@/lib/money';
 import { logError, userMessage } from '@/lib/errors';
 import { accountTypeSchema, type Account, type AccountType } from '@/types/domain';
 import { useLedger, useSettings } from '@/app/DataProvider';
@@ -32,6 +32,12 @@ const accountFormSchema = z.object({
   openingBalance: z
     .string()
     .refine((value) => parseSignedAmountInput(value) !== null, 'Enter a valid amount, like 250.00'),
+  creditLimit: z
+    .string()
+    .refine(
+      (value) => value.trim() === '' || (parseAmountInput(value) ?? 0) > 0,
+      'Enter a limit greater than zero, or leave it empty',
+    ),
 });
 
 type AccountFormValues = z.infer<typeof accountFormSchema>;
@@ -55,8 +61,10 @@ export function AccountFormDialog({
       name: account?.name ?? '',
       type: account?.type ?? 'checking',
       openingBalance: account ? minorToInputString(account.openingBalanceMinor) : '0.00',
+      creditLimit: account?.creditLimitMinor ? minorToInputString(account.creditLimitMinor) : '',
     },
   });
+  const type = form.watch('type');
 
   async function onSubmit(values: AccountFormValues) {
     const input = {
@@ -64,6 +72,10 @@ export function AccountFormDialog({
       type: values.type,
       currency: account?.currency ?? settings.currency,
       openingBalanceMinor: parseSignedAmountInput(values.openingBalance)!,
+      creditLimitMinor:
+        values.type === 'credit-card' && values.creditLimit.trim() !== ''
+          ? parseAmountInput(values.creditLimit)!
+          : undefined,
     };
     try {
       if (account) {
@@ -147,6 +159,28 @@ export function AccountFormDialog({
               </p>
             )}
           </div>
+          {type === 'credit-card' && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="account-limit">Credit limit (optional)</Label>
+              <Input
+                id="account-limit"
+                inputMode="decimal"
+                placeholder="1500.00"
+                className="font-mono"
+                aria-invalid={Boolean(errors.creditLimit)}
+                aria-describedby="account-limit-hint"
+                {...form.register('creditLimit')}
+              />
+              <p id="account-limit-hint" className="text-xs text-muted-foreground">
+                Used to show how much of the card is available and how close you are to the limit.
+              </p>
+              {errors.creditLimit && (
+                <p role="alert" className="text-xs text-destructive">
+                  {errors.creditLimit.message}
+                </p>
+              )}
+            </div>
+          )}
           <Button type="submit" disabled={isSubmitting}>
             {editing ? 'Save changes' : 'Create account'}
           </Button>

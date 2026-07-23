@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { limit, onSnapshot, orderBy, query, Timestamp, where } from 'firebase/firestore';
 import { format } from 'date-fns';
-import { Archive, ArchiveRestore, ArrowLeft, Pencil, Plus, Search } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Pencil,
+  Plus,
+  Scale,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import {
   CartesianGrid,
@@ -35,6 +44,9 @@ import { parseTransaction, setAccountArchived, transactionsCol } from '@/service
 import { legEffect } from '@/lib/ledger';
 import { accountTypeMeta } from '@/features/accounts/accountMeta';
 import { AccountFormDialog } from '@/features/accounts/AccountForm';
+import { AdjustBalanceDialog } from '@/features/accounts/AdjustBalanceDialog';
+import { DeleteAccountDialog } from '@/features/accounts/DeleteAccountDialog';
+import { CreditFacts } from '@/features/accounts/AccountsPage';
 import { TransactionList } from '@/features/transactions/TransactionList';
 
 const PAGE_SIZE = 50;
@@ -51,6 +63,8 @@ export function AccountDetailPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [editOpen, setEditOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
@@ -157,10 +171,26 @@ export function AccountDetailPage() {
           <Button
             variant="ghost"
             size="icon"
+            aria-label="Adjust balance"
+            onClick={() => setAdjustOpen(true)}
+          >
+            <Scale />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label={account.archived ? 'Restore account' : 'Archive account'}
             onClick={() => void toggleArchived()}
           >
             {account.archived ? <ArchiveRestore /> : <Archive />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Delete account"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 />
           </Button>
         </>
       }
@@ -183,6 +213,7 @@ export function AccountDetailPage() {
             <p className="mt-2 text-xs text-muted-foreground">
               Opened at <Money minor={account.openingBalanceMinor} className="text-xs" />
             </p>
+            <CreditFacts account={account} className="mt-3" />
           </CardContent>
         </Card>
         <Card className="lg:col-span-2">
@@ -294,6 +325,13 @@ export function AccountDetailPage() {
       </Card>
 
       <AccountFormDialog account={account} open={editOpen} onOpenChange={setEditOpen} />
+      <AdjustBalanceDialog account={account} open={adjustOpen} onOpenChange={setAdjustOpen} />
+      <DeleteAccountDialog
+        account={account}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={() => navigate('/accounts')}
+      />
     </Page>
   );
 }

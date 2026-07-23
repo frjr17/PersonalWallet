@@ -2,6 +2,7 @@ import {
   Timestamp,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -70,6 +71,7 @@ const accountDocSchema = z.object({
   currency: z.string(),
   openingBalanceMinor: z.number().int(),
   currentBalanceMinor: z.number().int(),
+  creditLimitMinor: z.number().int().positive().optional(),
   archived: z.boolean(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
@@ -90,6 +92,7 @@ export interface AccountInput {
   type: Account['type'];
   currency: string;
   openingBalanceMinor: number;
+  creditLimitMinor?: number;
 }
 
 export async function createAccount(uid: string, input: AccountInput): Promise<string> {
@@ -113,6 +116,7 @@ export async function updateAccount(
   const openingDelta = input.openingBalanceMinor - account.openingBalanceMinor;
   await updateDoc(doc(accountsCol(uid), account.id), {
     ...input,
+    creditLimitMinor: input.creditLimitMinor ?? deleteField(),
     currentBalanceMinor: account.currentBalanceMinor + openingDelta,
     updatedAt: serverTimestamp(),
   });

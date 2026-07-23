@@ -37,6 +37,8 @@ export interface Account {
   currency: string;
   openingBalanceMinor: number;
   currentBalanceMinor: number;
+  /** Credit cards only: spending limit; available = limit + balance (balance is negative when owing). */
+  creditLimitMinor?: number;
   archived: boolean;
   createdAt: Date;
   updatedAt: Date;

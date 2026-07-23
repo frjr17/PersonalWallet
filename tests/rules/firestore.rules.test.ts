@@ -114,6 +114,22 @@ describe('firestore security rules', () => {
         .doc(path)
         .set({ ...validAccount, archived: 'no' }),
     );
+    // credit limit must be a positive integer when present
+    await assertSucceeds(
+      ownerDb()
+        .doc(path)
+        .set({ ...validAccount, type: 'credit-card', creditLimitMinor: 150000 }),
+    );
+    await assertFails(
+      ownerDb()
+        .doc(path)
+        .set({ ...validAccount, type: 'credit-card', creditLimitMinor: 0 }),
+    );
+    await assertFails(
+      ownerDb()
+        .doc(path)
+        .set({ ...validAccount, type: 'credit-card', creditLimitMinor: 1500.5 }),
+    );
   });
 
   it('rejects invalid monetary values on transactions', async () => {

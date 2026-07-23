@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  OUTSIDE_ACCOUNT,
+  adjustmentDelta,
   createEntryDeltas,
   createTransferDeltas,
   deleteDeltas,
@@ -142,5 +144,59 @@ describe('transfer deltas', () => {
         ['b', -1000],
       ]),
     );
+  });
+});
+
+describe('outside-of-wallet transfers', () => {
+  it('moves only the real account when money leaves the wallet', () => {
+    expect(
+      createTransferDeltas({
+        sourceAccountId: 'a',
+        destinationAccountId: OUTSIDE_ACCOUNT,
+        amountMinor: 500,
+      }),
+    ).toEqual(new Map([['a', -500]]));
+  });
+
+  it('moves only the real account when money enters the wallet', () => {
+    expect(
+      createTransferDeltas({
+        sourceAccountId: OUTSIDE_ACCOUNT,
+        destinationAccountId: 'a',
+        amountMinor: 500,
+      }),
+    ).toEqual(new Map([['a', 500]]));
+  });
+
+  it('edits between outside and real accounts stay balanced', () => {
+    // was a→outside 500; becomes a→b 500: a unchanged, b +500
+    const outLeg = [
+      {
+        type: 'transfer' as const,
+        accountId: 'a',
+        destinationAccountId: OUTSIDE_ACCOUNT,
+        amountMinor: 500,
+      },
+    ];
+    expect(
+      editTransferDeltas(outLeg, {
+        sourceAccountId: 'a',
+        destinationAccountId: 'b',
+        amountMinor: 500,
+      }),
+    ).toEqual(new Map([['b', 500]]));
+  });
+
+  it('an incoming-from-outside leg credits its account', () => {
+    expect(legEffect({ type: 'transfer', amountMinor: 700 })).toBe(700);
+  });
+});
+
+describe('adjustmentDelta', () => {
+  it('computes the outside transfer needed to reach a target balance', () => {
+    expect(adjustmentDelta(1000, 2500)).toBe(1500);
+    expect(adjustmentDelta(2500, 1000)).toBe(-1500);
+    expect(adjustmentDelta(-500, 0)).toBe(500);
+    expect(adjustmentDelta(1000, 1000)).toBe(0);
   });
 });

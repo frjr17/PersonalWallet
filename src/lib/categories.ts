@@ -1,6 +1,56 @@
 // Relative import so scripts/seed-emulator.ts can run this through tsx without aliases.
 import type { CategoryType } from '../types/domain';
 
+export const MAX_CATEGORY_DEPTH = 4;
+
+interface CategoryNode {
+  id: string;
+  name: string;
+  parentCategoryId?: string;
+}
+
+/** 1-based nesting depth. Cycles or missing parents stop the walk safely. */
+export function categoryDepth(categories: CategoryNode[], id: string): number {
+  let depth = 0;
+  let current: CategoryNode | undefined = categories.find((category) => category.id === id);
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    depth += 1;
+    current = categories.find((category) => category.id === current!.parentCategoryId);
+  }
+  return depth;
+}
+
+/** Breadcrumb label: "Housing › Utilities › Water". */
+export function categoryPath(categories: CategoryNode[], id: string): string {
+  const names: string[] = [];
+  let current: CategoryNode | undefined = categories.find((category) => category.id === id);
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    names.unshift(current.name);
+    current = categories.find((category) => category.id === current!.parentCategoryId);
+  }
+  return names.join(' › ');
+}
+
+/** True when `id` sits anywhere under `ancestorId`. */
+export function isDescendantOf(
+  categories: CategoryNode[],
+  id: string,
+  ancestorId: string,
+): boolean {
+  let current: CategoryNode | undefined = categories.find((category) => category.id === id);
+  const seen = new Set<string>();
+  while (current?.parentCategoryId && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.parentCategoryId === ancestorId) return true;
+    current = categories.find((category) => category.id === current!.parentCategoryId);
+  }
+  return false;
+}
+
 export interface CategorySeed {
   name: string;
   type: CategoryType;

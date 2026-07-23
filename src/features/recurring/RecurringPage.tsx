@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
+import { CategoryPicker } from '@/features/categories/CategoryPicker';
 import { advanceOccurrence, toDateInput } from '@/lib/dates';
 import { minorToInputString, parseAmountInput } from '@/lib/money';
 import { logError, userMessage } from '@/lib/errors';
@@ -92,7 +93,7 @@ function RecurringFormDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { uid, activeAccounts, categories } = useLedger();
+  const { uid, activeAccounts } = useLedger();
   const { settings } = useSettings();
   const editing = Boolean(recurring);
 
@@ -111,9 +112,6 @@ function RecurringFormDialog({
     },
   });
   const type = form.watch('type');
-  const availableCategories = categories.filter(
-    (category) => category.type === type && !category.archived,
-  );
 
   async function onSubmit(values: RecurringFormValues) {
     const nextOccurrence = new Date(`${values.nextOccurrence}T09:00`);
@@ -237,21 +235,15 @@ function RecurringFormDialog({
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="recurring-category">Category</Label>
-              <Select
-                value={form.watch('categoryId')}
-                onValueChange={(value) => form.setValue('categoryId', value)}
-              >
-                <SelectTrigger id="recurring-category" aria-invalid={Boolean(errors.categoryId)}>
-                  <SelectValue placeholder="Pick a category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableCategories.map((category) => (
-                    <SelectItem key={category.id} value={category.id}>
-                      {category.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <CategoryPicker
+                id="recurring-category"
+                type={type}
+                value={form.watch('categoryId') || undefined}
+                onChange={(categoryId) => form.setValue('categoryId', categoryId ?? '')}
+                allowNone={false}
+                invalid={Boolean(errors.categoryId)}
+                includeCategoryId={recurring?.categoryId}
+              />
               {errors.categoryId && (
                 <p role="alert" className="text-xs text-destructive">
                   {errors.categoryId.message}

@@ -115,7 +115,7 @@ describe('TransactionFormPage', () => {
   it('parses the amount into minor units and records the expense', async () => {
     renderForm();
     await userEvent.type(screen.getByLabelText('Amount'), '12.50');
-    await userEvent.type(screen.getByLabelText('Description'), 'Weekly groceries');
+    await userEvent.type(screen.getByLabelText(/^Description/), 'Weekly groceries');
     await userEvent.click(screen.getByRole('button', { name: 'Record expense' }));
     await waitFor(() => expect(createEntry).toHaveBeenCalledOnce());
     const [, input] = createEntry.mock.calls[0]!;

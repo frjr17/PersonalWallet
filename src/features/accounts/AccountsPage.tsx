@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, MoreVertical, Pencil, Plus, Wallet } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Scale,
+  Trash2,
+  Wallet,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Page } from '@/components/layout/Page';
 import { Money } from '@/components/money';
@@ -11,6 +20,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -22,10 +32,44 @@ import { useLedger } from '@/app/DataProvider';
 import { setAccountArchived } from '@/services/repositories';
 import { accountTypeMeta } from '@/features/accounts/accountMeta';
 import { AccountFormDialog } from '@/features/accounts/AccountForm';
+import { AdjustBalanceDialog } from '@/features/accounts/AdjustBalanceDialog';
+import { DeleteAccountDialog } from '@/features/accounts/DeleteAccountDialog';
+
+/** Credit-card facts: what's available under the limit and how used it is. */
+export function CreditFacts({ account, className }: { account: Account; className?: string }) {
+  if (account.type !== 'credit-card' || !account.creditLimitMinor) return null;
+  const availableMinor = account.creditLimitMinor + Math.min(0, account.currentBalanceMinor);
+  const usedRatio = Math.min(
+    1,
+    Math.max(0, -account.currentBalanceMinor / account.creditLimitMinor),
+  );
+  return (
+    <div className={className}>
+      <div className="flex items-baseline justify-between text-xs text-muted-foreground">
+        <span>
+          <Money minor={availableMinor} className="text-xs" /> available
+        </span>
+        <span>
+          Limit <Money minor={account.creditLimitMinor} className="text-xs" />
+        </span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <div
+          className={
+            usedRatio >= 0.9 ? 'h-full rounded-full bg-expense' : 'h-full rounded-full bg-primary'
+          }
+          style={{ width: `${usedRatio * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function AccountCard({ account, onEdit }: { account: Account; onEdit: () => void }) {
   const { uid } = useLedger();
   const meta = accountTypeMeta[account.type];
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   async function toggleArchived() {
     try {
@@ -55,6 +99,7 @@ function AccountCard({ account, onEdit }: { account: Account; onEdit: () => void
             tone={account.currentBalanceMinor < 0 ? 'expense' : 'neutral'}
             className="mt-2 block text-2xl font-semibold"
           />
+          <CreditFacts account={account} className="mt-2" />
         </Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -65,6 +110,9 @@ function AccountCard({ account, onEdit }: { account: Account; onEdit: () => void
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={onEdit}>
               <Pencil /> Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setAdjustOpen(true)}>
+              <Scale /> Adjust balance
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void toggleArchived()}>
               {account.archived ? (
@@ -77,8 +125,14 @@ function AccountCard({ account, onEdit }: { account: Account; onEdit: () => void
                 </>
               )}
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
+              <Trash2 /> Delete
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <AdjustBalanceDialog account={account} open={adjustOpen} onOpenChange={setAdjustOpen} />
+        <DeleteAccountDialog account={account} open={deleteOpen} onOpenChange={setDeleteOpen} />
       </CardContent>
     </Card>
   );

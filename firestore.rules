@@ -20,6 +20,8 @@ service cloud.firestore {
         && incoming().currency is string
         && incoming().openingBalanceMinor is int
         && incoming().currentBalanceMinor is int
+        && (!('creditLimitMinor' in incoming())
+          || (incoming().creditLimitMinor is int && incoming().creditLimitMinor > 0))
         && incoming().archived is bool;
     }
 

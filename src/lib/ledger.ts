@@ -7,6 +7,13 @@ import type { Transaction, TransactionType } from '@/types/domain';
  * Firestore batches; tests exercise them directly.
  */
 
+/**
+ * Sentinel for money entering or leaving the wallet entirely ("Outside of
+ * wallet"). Used only in transfer inputs — never stored. A transfer with an
+ * outside end stores a single leg and moves a single balance.
+ */
+export const OUTSIDE_ACCOUNT = '__outside__';
+
 type Leg = Pick<Transaction, 'type' | 'amountMinor' | 'accountId' | 'destinationAccountId'>;
 
 /** Effect of one stored transaction document on its own account's balance. */
@@ -19,6 +26,7 @@ export function legEffect(txn: Pick<Leg, 'type' | 'amountMinor' | 'destinationAc
 export type BalanceDeltaMap = Map<string, number>;
 
 function add(map: BalanceDeltaMap, accountId: string, delta: number): BalanceDeltaMap {
+  if (accountId === OUTSIDE_ACCOUNT) return map; // the outside world has no balance
   const next = (map.get(accountId) ?? 0) + delta;
   if (next === 0) map.delete(accountId);
   else map.set(accountId, next);
@@ -48,6 +56,7 @@ export function deleteDeltas(legs: Leg[]): BalanceDeltaMap {
   return deltas;
 }
 
+/** Either side may be OUTSIDE_ACCOUNT (but not both — validated by the service). */
 export interface TransferLike {
   sourceAccountId: string;
   destinationAccountId: string;
@@ -63,4 +72,12 @@ export function editTransferDeltas(oldLegs: Leg[], next: TransferLike): BalanceD
   const deltas = deleteDeltas(oldLegs);
   add(deltas, next.sourceAccountId, -next.amountMinor);
   return add(deltas, next.destinationAccountId, next.amountMinor);
+}
+
+/**
+ * "Adjust by record": the outside-of-wallet transfer that moves an account
+ * from its current balance to a target balance. Positive = money in.
+ */
+export function adjustmentDelta(currentMinor: number, targetMinor: number): number {
+  return targetMinor - currentMinor;
 }
