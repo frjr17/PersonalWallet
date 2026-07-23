@@ -240,7 +240,7 @@ export function DashboardPage() {
 
       {/* List of accounts — colored chips, like a wallet laid open. */}
       <section aria-label="Accounts">
-        <div className="mb-2 flex items-baseline justify-between">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3">
           <h2 className="font-display text-base font-semibold">Accounts</h2>
           <span className="text-sm text-muted-foreground">
             Total{' '}
@@ -256,11 +256,14 @@ export function DashboardPage() {
             <Link
               key={account.id}
               to={`/accounts/${account.id}`}
-              className="rounded-lg p-3 text-white shadow-xs outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="min-w-0 overflow-hidden rounded-lg p-3 text-white shadow-xs outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/60"
               style={{ background: categoricalColors[index % categoricalColors.length] }}
             >
               <span className="block truncate text-xs font-medium opacity-90">{account.name}</span>
-              <Money minor={account.currentBalanceMinor} className="text-lg font-semibold" />
+              <Money
+                minor={account.currentBalanceMinor}
+                className="block truncate text-lg font-semibold"
+              />
             </Link>
           ))}
           <button
@@ -298,7 +301,7 @@ export function DashboardPage() {
             </Link>
           </CardHeader>
           <CardContent>
-            <div className="mb-3 flex items-baseline justify-between">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
               <div>
                 <p className="text-xs tracking-wide text-muted-foreground uppercase">This month</p>
                 <Money minor={expenses} className="text-2xl font-semibold" />
@@ -322,7 +325,7 @@ export function DashboardPage() {
                 No expenses this month yet.
               </p>
             ) : (
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col items-center gap-4 sm:flex-row">
                 <div className="relative h-44 w-44 shrink-0">
                   <ResponsiveContainer>
                     <PieChart>
@@ -358,7 +361,7 @@ export function DashboardPage() {
                     </div>
                   </div>
                 </div>
-                <ul className="min-w-0 flex-1" aria-label="Spending by category">
+                <ul className="w-full min-w-0 flex-1" aria-label="Spending by category">
                   {categorySpend.map((entry, index) => (
                     <li key={entry.name} className="flex items-center gap-2 py-1 text-sm">
                       <span

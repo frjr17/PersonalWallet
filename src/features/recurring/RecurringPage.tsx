@@ -388,12 +388,12 @@ export function RecurringPage() {
     return (
       <li
         key={item.id}
-        className="flex items-center gap-3 border-b border-dashed py-3 last:border-b-0"
+        className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-dashed py-3 last:border-b-0"
       >
         <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
           <CategoryIcon icon={category?.icon} />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-40">
           <p className="truncate text-sm font-medium">
             {item.description}
             {!item.active && (
@@ -421,10 +421,10 @@ export function RecurringPage() {
           minor={item.type === 'income' ? item.amountMinor : -item.amountMinor}
           signed
           tone="auto"
-          className="text-sm font-medium"
+          className="ml-auto shrink-0 text-sm font-medium"
         />
         {isDue ? (
-          <div className="flex gap-1.5">
+          <div className="flex shrink-0 gap-1.5">
             <Button size="sm" onClick={() => void confirm(item)}>
               <Check /> Confirm
             </Button>

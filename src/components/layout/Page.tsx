@@ -15,7 +15,8 @@ export function Page({
   className?: string;
 }) {
   return (
-    <main className={cn('mx-auto w-full max-w-5xl p-4 md:p-8', className)}>
+    // overflow-x-clip: wide content clips inside cards; the page never scrolls sideways.
+    <main className={cn('mx-auto w-full max-w-5xl overflow-x-clip p-4 md:p-8', className)}>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold tracking-tight">{title}</h1>

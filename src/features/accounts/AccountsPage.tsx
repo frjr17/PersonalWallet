@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
-import { sumMinor } from '@/lib/money';
 import { logError, userMessage } from '@/lib/errors';
 import type { Account } from '@/types/domain';
 import { useLedger } from '@/app/DataProvider';
@@ -145,7 +144,6 @@ export function AccountsPage() {
   const [showArchived, setShowArchived] = useState(false);
 
   const archived = accounts.filter((account) => account.archived);
-  const netWorth = sumMinor(activeAccounts.map((account) => account.currentBalanceMinor));
 
   function openCreate() {
     setEditing(undefined);
@@ -181,15 +179,7 @@ export function AccountsPage() {
         />
       ) : (
         <>
-          <div className="mb-6 flex items-baseline gap-3">
-            <span className="text-sm text-muted-foreground">Net total</span>
-            <Money
-              minor={netWorth}
-              tone={netWorth < 0 ? 'expense' : 'neutral'}
-              className="text-xl font-semibold"
-            />
-          </div>
-          <section aria-label="Accounts" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                   <section aria-label="Accounts" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {activeAccounts.map((account) => (
               <AccountCard
                 key={account.id}
