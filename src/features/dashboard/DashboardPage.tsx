@@ -490,7 +490,9 @@ export function DashboardPage() {
                 No transactions this month yet.
               </p>
             ) : (
-              <TransactionList transactions={recentTransactions} compact />
+              <ResponsiveContainer>
+                <TransactionList transactions={recentTransactions} compact />
+              </ResponsiveContainer>
             )}
           </CardContent>
         </Card>
@@ -500,24 +502,26 @@ export function DashboardPage() {
             <CardTitle>Upcoming recurring</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 pt-0">
-            {upcomingRecurring.length === 0 ? (
-              <p className="py-4 text-sm text-muted-foreground">Nothing scheduled.</p>
-            ) : (
-              upcomingRecurring.map((item) => (
-                <div key={item.id} className="flex items-center gap-2 text-sm">
-                  <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
-                    {format(item.nextOccurrence, 'MMM d')}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{item.description}</span>
-                  <Money
-                    minor={item.type === 'income' ? item.amountMinor : -item.amountMinor}
-                    signed
-                    tone="auto"
-                    className="text-xs"
-                  />
-                </div>
-              ))
-            )}
+            <ResponsiveContainer>
+              {upcomingRecurring.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground">Nothing scheduled.</p>
+              ) : (
+                upcomingRecurring.map((item) => (
+                  <div key={item.id} className="flex items-center gap-2 text-sm">
+                    <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
+                      {format(item.nextOccurrence, 'MMM d')}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{item.description}</span>
+                    <Money
+                      minor={item.type === 'income' ? item.amountMinor : -item.amountMinor}
+                      signed
+                      tone="auto"
+                      className="text-xs"
+                    />
+                  </div>
+                ))
+              )}
+            </ResponsiveContainer>
           </CardContent>
         </Card>
       </div>
