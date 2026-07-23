@@ -1,0 +1,98 @@
+rules_version = '2';
+
+// Single-owner ledger. Replace YOUR_FIREBASE_OWNER_UID with your Firebase Auth
+// UID before deploying (README → "Owner UID"). Everything else is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(uid) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && request.auth.uid == "Fg16pRskGNTSXsErmBDFlZGMk142";
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function validAccount() {
+      return incoming().name is string && incoming().name.size() > 0
+        && incoming().type in ['cash', 'checking', 'savings', 'credit-card', 'investment', 'loan']
+        && incoming().currency is string
+        && incoming().openingBalanceMinor is int
+        && incoming().currentBalanceMinor is int
+        && incoming().archived is bool;
+    }
+
+    function validCategory() {
+      return incoming().name is string && incoming().name.size() > 0
+        && incoming().type in ['income', 'expense']
+        && incoming().archived is bool
+        && (!('parentCategoryId' in incoming()) || incoming().parentCategoryId is string);
+    }
+
+    function validTransaction() {
+      return incoming().type in ['income', 'expense', 'transfer']
+        && incoming().accountId is string
+        && incoming().amountMinor is int && incoming().amountMinor > 0
+        && incoming().currency is string
+        && incoming().description is string
+        && incoming().occurredAt is timestamp
+        && incoming().source in ['manual', 'csv-import', 'recurring'];
+    }
+
+    function validBudget() {
+      return incoming().categoryId is string
+        && incoming().period is string && incoming().period.matches('[0-9]{4}-[0-9]{2}')
+        && incoming().limitMinor is int && incoming().limitMinor > 0
+        && incoming().warningThreshold is number
+        && incoming().warningThreshold >= 0 && incoming().warningThreshold <= 1
+        && incoming().rollover is bool;
+    }
+
+    function validRecurring() {
+      return incoming().type in ['income', 'expense']
+        && incoming().accountId is string
+        && incoming().categoryId is string
+        && incoming().amountMinor is int && incoming().amountMinor > 0
+        && incoming().frequency in ['weekly', 'biweekly', 'monthly', 'yearly']
+        && incoming().interval is int && incoming().interval > 0
+        && incoming().nextOccurrence is timestamp
+        && incoming().active is bool;
+    }
+
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /settings/{id} {
+        allow read, write: if isOwner(uid);
+      }
+      match /accounts/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validAccount();
+      }
+      match /categories/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validCategory();
+      }
+      match /transactions/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validTransaction();
+      }
+      match /budgets/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validBudget();
+      }
+      match /recurringTransactions/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validRecurring();
+      }
+      match /imports/{id} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

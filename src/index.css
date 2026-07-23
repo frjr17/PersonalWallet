@@ -1,0 +1,149 @@
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/instrument-sans';
+@import '@fontsource-variable/spline-sans-mono';
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Stone paper + warm ink + ledger green. Money follows bookkeeping ink:
+     income in the green, expenses in the red, transfers stay neutral. */
+  --background: #faf9f7;
+  --foreground: #1c1917;
+  --card: #ffffff;
+  --card-foreground: #1c1917;
+  --popover: #ffffff;
+  --popover-foreground: #1c1917;
+  --primary: #17614a;
+  --primary-foreground: #f4fbf8;
+  --secondary: #f1efec;
+  --secondary-foreground: #1c1917;
+  --muted: #f1efec;
+  --muted-foreground: #78716c;
+  --accent: #eaf3ee;
+  --accent-foreground: #14523f;
+  --destructive: #b42318;
+  --destructive-foreground: #fef2f1;
+  --border: #e6e3de;
+  --input: #dcd8d2;
+  --ring: #17614a;
+  --income: #177245;
+  --expense: #b42318;
+  --transfer: #6b7280;
+  --radius: 0.625rem;
+  /* Chart palettes are CVD-validated (dataviz six checks) — don't eyeball edits. */
+  --chart-1: #15803d;
+  --chart-2: #d97706;
+  --chart-3: #2563eb;
+  --chart-4: #db2777;
+  --chart-5: #7c3aed;
+  --chart-income: #177245;
+  --chart-expense: #b42318;
+  --chart-other: #78716c;
+}
+
+.dark {
+  --background: #171412;
+  --foreground: #edeae6;
+  --card: #1f1c19;
+  --card-foreground: #edeae6;
+  --popover: #1f1c19;
+  --popover-foreground: #edeae6;
+  --primary: #3fbf8f;
+  --primary-foreground: #0b2a1f;
+  --secondary: #262220;
+  --secondary-foreground: #edeae6;
+  --muted: #262220;
+  --muted-foreground: #a8a29e;
+  --accent: #20302a;
+  --accent-foreground: #7cd8b5;
+  --destructive: #f0665a;
+  --destructive-foreground: #2a0e0b;
+  --border: #2e2a26;
+  --input: #3a352f;
+  --ring: #3fbf8f;
+  --income: #4cc38a;
+  --expense: #f0665a;
+  --transfer: #9ca3af;
+  --chart-1: #25a05f;
+  --chart-2: #c8811c;
+  --chart-3: #4f83ec;
+  --chart-4: #d8548f;
+  --chart-5: #9a6cf0;
+  --chart-income: #2ca06c;
+  --chart-expense: #e0685c;
+  --chart-other: #a8a29e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-income: var(--income);
+  --color-expense: var(--expense);
+  --color-transfer: var(--transfer);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-income: var(--chart-income);
+  --color-chart-expense: var(--chart-expense);
+  --color-chart-other: var(--chart-other);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: 'Instrument Sans Variable', system-ui, sans-serif;
+  --font-display: 'Bricolage Grotesque Variable', 'Instrument Sans Variable', sans-serif;
+  --font-mono: 'Spline Sans Mono Variable', ui-monospace, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+    outline-color: color-mix(in oklab, var(--color-ring) 50%, transparent);
+  }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Amounts, dates and other tabular data always read as ledger entries. */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

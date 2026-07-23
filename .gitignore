@@ -1,12 +1,29 @@
+# deps / build
 node_modules
 dist
+dev-dist
+*.tsbuildinfo
+
+# env & secrets — never commit real Firebase config or owner UIDs
 .env
 .env.*
 !.env.example
+*-service-account*.json
+
+# firebase local state
 .firebase
 firebase-debug.log
 firestore-debug.log
+ui-debug.log
+firestore.emulator.rules
+
+# financial backups
+*.backup.json
+
+# tests
 coverage
 playwright-report
 test-results
-*.backup.json
+
+# editor/os
+.DS_Store
