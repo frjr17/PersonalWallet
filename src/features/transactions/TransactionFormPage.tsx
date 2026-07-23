@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { format } from 'date-fns';
-import { ArrowDown, ArrowLeftRight, ArrowUp, Search } from 'lucide-react';
+import { ArrowDown, ArrowLeftRight, ArrowUp, Check, Search, X } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { CategoryIcon } from '@/components/categories/CategoryIcon';
@@ -14,6 +14,7 @@ import { useAuth } from '@/features/authentication/AuthProvider';
 import { asDate } from '@/lib/dates';
 import { flattenCategories } from '@/lib/categories';
 import { formatMoney, parseMoney } from '@/lib/money';
+import { cn } from '@/lib/utils';
 import { accountBalanceView } from '@/services/finance';
 import { fingerprint } from '@/services/fingerprint';
 import {
@@ -91,6 +92,14 @@ export function TransactionFormPage() {
   const destinationAccountId = watch('destinationAccountId');
   const categoryId = watch('categoryId');
   const amountReady = isReadyAmount(amount);
+  const selectedAccount = activeAccounts.find((account) => account.id === accountId);
+  const selectedDestination = activeAccounts.find((account) => account.id === destinationAccountId);
+  const selectedCategory = categoryId
+    ? flattenCategories(categories, { type: type === 'income' ? 'income' : 'expense' }).find(
+        ({ category }) => category.id === categoryId,
+      )
+    : undefined;
+  const amountTone = type === 'income' ? 'bg-jade' : type === 'expense' ? 'bg-apricot' : 'bg-ink';
 
   useEffect(() => {
     if (!source) return;
@@ -193,14 +202,39 @@ export function TransactionFormPage() {
       title={
         type === 'transfer' ? 'Move money' : type === 'income' ? 'Record income' : 'Record expense'
       }
+      action={
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            aria-label="Cancel"
+            onClick={() => navigate(-1)}
+          >
+            <X size={18} />
+          </Button>
+          <Button
+            form="transaction-form"
+            disabled={isSubmitting || !amountReady}
+            aria-label="Save entry"
+          >
+            <Check size={18} />
+          </Button>
+        </div>
+      }
     >
-      <form onSubmit={submit} className="grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-7">
-          <section className="border-b pb-7">
+      <form
+        id="transaction-form"
+        onSubmit={submit}
+        className="grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,1fr)_23rem]"
+      >
+        <div className="space-y-6">
+          <section
+            className={cn('overflow-hidden rounded-[2rem] text-white shadow-lg', amountTone)}
+          >
             <fieldset>
               <legend className="sr-only">Entry type</legend>
-              <div className="grid grid-cols-3 border-b">
-                {typeOptions.map(({ value, label, icon: Icon, tone }) => {
+              <div className="grid grid-cols-3 bg-black/10">
+                {typeOptions.map(({ value, label }) => {
                   const disabled = value === 'transfer' && (activeAccounts.length < 2 || editing);
                   return (
                     <button
@@ -208,40 +242,69 @@ export function TransactionFormPage() {
                       key={value}
                       disabled={disabled}
                       aria-pressed={type === value}
-                      className={`relative flex min-h-14 items-center justify-center gap-2 px-2 text-sm font-semibold transition-colors after:absolute after:inset-x-3 after:bottom-[-1px] after:h-0.5 after:scale-x-0 after:transition-transform disabled:cursor-not-allowed disabled:opacity-35 ${
-                        type === value
-                          ? tone === 'apricot'
-                            ? 'text-apricot after:scale-x-100 after:bg-apricot'
-                            : tone === 'jade'
-                              ? 'text-jade after:scale-x-100 after:bg-jade dark:text-[#67c7b5]'
-                              : 'text-ink after:scale-x-100 after:bg-ink dark:text-white dark:after:bg-white'
-                          : 'text-ink/55 hover:text-ink dark:text-white/55 dark:hover:text-white'
-                      }`}
+                      className={cn(
+                        'min-h-16 border-x border-black/10 px-2 text-sm font-bold uppercase tracking-wide transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-base',
+                        type === value ? 'bg-white/12 shadow-inner' : 'hover:bg-white/10',
+                      )}
                       onClick={() => {
                         setValue('type', value, { shouldDirty: true, shouldValidate: true });
                         setCategorySearch('');
                       }}
                     >
-                      <Icon size={18} />
                       {label}
                     </button>
                   );
                 })}
               </div>
               <input type="hidden" {...register('type')} />
+            </fieldset>
+            <div className="px-6 py-10 sm:px-10">
+              <div className="flex items-end justify-between gap-4">
+                <span className="text-5xl font-light">
+                  {type === 'income' ? '+' : type === 'expense' ? '−' : ''}
+                </span>
+                <div className="min-w-0 text-right">
+                  <p className="amount truncate text-7xl font-light leading-none sm:text-8xl">
+                    {amount || '0'}
+                  </p>
+                  <p className="mt-2 text-3xl font-light opacity-80">
+                    {selectedAccount?.currency ?? 'USD'}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-12 grid gap-4 text-center sm:grid-cols-2">
+                <div>
+                  <p className="text-sm opacity-55">
+                    {type === 'transfer' ? 'From account' : 'Account'}
+                  </p>
+                  <p className="truncate text-xl font-semibold uppercase">
+                    {selectedAccount?.name ?? 'Choose account'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm opacity-55">
+                    {type === 'transfer' ? 'To account' : 'Category'}
+                  </p>
+                  <p className="truncate text-xl font-semibold uppercase">
+                    {type === 'transfer'
+                      ? (selectedDestination?.name ?? 'Choose destination')
+                      : (selectedCategory?.path ?? 'Choose category')}
+                  </p>
+                </div>
+              </div>
               {editing ? (
-                <p className="mt-3 text-sm opacity-60">
+                <p className="mt-6 text-sm opacity-75">
                   Transfers are linked entries and can only be created from a new entry.
                 </p>
               ) : activeAccounts.length < 2 ? (
-                <p className="mt-3 text-sm opacity-60">
+                <p className="mt-6 text-sm opacity-75">
                   Add a second active account to enable transfers.
                 </p>
               ) : null}
-            </fieldset>
+            </div>
           </section>
 
-          <section className="border-b pb-7">
+          <section className="card">
             <FieldLabel>{type === 'transfer' ? 'From account' : 'Account'}</FieldLabel>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {activeAccounts.map((account) => (
@@ -295,7 +358,7 @@ export function TransactionFormPage() {
           </section>
 
           {type !== 'transfer' && (
-            <section className="border-b pb-7">
+            <section className="card">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <FieldLabel>Category</FieldLabel>
@@ -356,7 +419,7 @@ export function TransactionFormPage() {
             </section>
           )}
 
-          <section>
+          <section className="card">
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="sm:col-span-2">
                 <FieldLabel>Description</FieldLabel>
@@ -395,7 +458,7 @@ export function TransactionFormPage() {
         </div>
 
         <div className="lg:sticky lg:top-6 lg:self-start">
-          <aside className="rounded-2xl bg-ink/[.035] p-4 dark:bg-white/[.045]">
+          <aside className="rounded-[2rem] bg-[#141615] p-4 text-white shadow-lg dark:bg-white/[.06]">
             <div className="mb-4">
               <FieldLabel>Amount</FieldLabel>
               <p className="text-sm opacity-55">Calculate here, then save the final result.</p>
