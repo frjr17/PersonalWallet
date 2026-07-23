@@ -179,7 +179,7 @@ export function AccountsPage() {
         />
       ) : (
         <>
-                   <section aria-label="Accounts" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <section aria-label="Accounts" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {activeAccounts.map((account) => (
               <AccountCard
                 key={account.id}

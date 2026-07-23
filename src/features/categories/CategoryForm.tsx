@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -19,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { CategoryIcon, categoryIconNames } from '@/components/categories/CategoryIcon';
+import { CategoryIcon, categoryIconGroups } from '@/components/categories/CategoryIcon';
 import { cn } from '@/lib/utils';
 import { MAX_CATEGORY_DEPTH, categoryDepth, categoryPath, isDescendantOf } from '@/lib/categories';
 import { logError, userMessage } from '@/lib/errors';
@@ -66,6 +67,19 @@ export function CategoryFormDialog({
   });
   const type = form.watch('type');
   const icon = form.watch('icon');
+
+  const [iconSearch, setIconSearch] = useState('');
+  const visibleGroups = useMemo(() => {
+    const needle = iconSearch.trim().toLowerCase();
+    return categoryIconGroups
+      .map((group) => ({
+        label: group.label,
+        names: Object.keys(group.icons).filter(
+          (name) => !needle || name.includes(needle) || group.label.toLowerCase().includes(needle),
+        ),
+      }))
+      .filter((group) => group.names.length > 0);
+  }, [iconSearch]);
 
   // Any same-type category can be a parent, up to 4 levels deep — never itself
   // or one of its own descendants.
@@ -151,24 +165,48 @@ export function CategoryFormDialog({
           )}
           <fieldset className="grid gap-1.5">
             <legend className="text-sm font-medium">Icon</legend>
-            <div className="flex flex-wrap gap-1.5">
-              {categoryIconNames.map((name) => (
-                <button
-                  key={name}
-                  type="button"
-                  aria-label={`Icon ${name}`}
-                  aria-pressed={icon === name}
-                  onClick={() => form.setValue('icon', name)}
-                  className={cn(
-                    'grid size-9 place-items-center rounded-md border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
-                    icon === name
-                      ? 'border-primary bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:bg-secondary',
-                  )}
-                >
-                  <CategoryIcon icon={name} />
-                </button>
-              ))}
+            <Input
+              type="search"
+              value={iconSearch}
+              onChange={(event) => setIconSearch(event.target.value)}
+              placeholder="Search icons — groceries, fuel, gym…"
+              aria-label="Search icons"
+              className="h-8 text-sm"
+            />
+            <div className="max-h-52 overflow-y-auto rounded-md border p-2">
+              {visibleGroups.length === 0 ? (
+                <p className="py-4 text-center text-xs text-muted-foreground">
+                  No icon matches “{iconSearch}”.
+                </p>
+              ) : (
+                visibleGroups.map((group) => (
+                  <div key={group.label} className="mb-2 last:mb-0">
+                    <p className="mb-1 text-[11px] tracking-wide text-muted-foreground uppercase">
+                      {group.label}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {group.names.map((name) => (
+                        <button
+                          key={name}
+                          type="button"
+                          title={name.replace(/-/g, ' ')}
+                          aria-label={`Icon ${name.replace(/-/g, ' ')}`}
+                          aria-pressed={icon === name}
+                          onClick={() => form.setValue('icon', name)}
+                          className={cn(
+                            'grid size-9 place-items-center rounded-md border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
+                            icon === name
+                              ? 'border-primary bg-accent text-accent-foreground'
+                              : 'text-muted-foreground hover:bg-secondary',
+                          )}
+                        >
+                          <CategoryIcon icon={name} />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </fieldset>
           <div className="grid gap-1.5">
