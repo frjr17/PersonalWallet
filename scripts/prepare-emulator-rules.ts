@@ -1,9 +1,21 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
 
-const source = await readFile('firestore.rules', 'utf8');
-const emulatorRules = source.replace(
-  /request\.auth\.uid == "[^"]+"/,
-  'request.auth.uid == "YOUR_FIREBASE_OWNER_UID"',
+/**
+ * Rules and E2E tests run against the emulator with a known owner UID.
+ * This swaps the owner literal — whether it's still the YOUR_FIREBASE_OWNER_UID
+ * placeholder or an already-configured real UID — into a gitignored copy.
+ */
+const EMULATOR_OWNER_UID = 'emulator-owner-uid';
+
+const rules = readFileSync('firestore.rules', 'utf8');
+const ownerLiteral = /request\.auth\.uid == "[^"]+"/;
+if (!ownerLiteral.test(rules)) {
+  throw new Error(
+    'firestore.rules has no `request.auth.uid == "<owner>"` check — refusing to write emulator rules.',
+  );
+}
+writeFileSync(
+  'firestore.emulator.rules',
+  rules.replace(ownerLiteral, `request.auth.uid == "${EMULATOR_OWNER_UID}"`),
 );
-await mkdir('.firebase', { recursive: true });
-await writeFile('.firebase/firestore.test.rules', emulatorRules, 'utf8');
+console.log(`Wrote firestore.emulator.rules (owner: ${EMULATOR_OWNER_UID})`);

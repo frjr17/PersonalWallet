@@ -1,407 +1,233 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Archive,
-  Banknote,
-  CreditCard,
-  Landmark,
-  Loader2,
+  ArchiveRestore,
+  MoreVertical,
   Pencil,
-  PiggyBank,
   Plus,
-  RotateCcw,
-  TrendingUp,
-  WalletCards,
+  Scale,
+  Trash2,
+  Wallet,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Page } from '@/components/layout/Page';
-import { Button } from '@/components/ui/Button';
-import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { useData } from '@/app/DataProvider';
-import { useAuth } from '@/features/authentication/AuthProvider';
-import { archiveAccount, saveAccount } from '@/services/repositories';
-import { accountBalanceView } from '@/services/finance';
-import { formatMoney, parseMoney } from '@/lib/money';
-import type { Account, AccountType } from '@/types/domain';
+import { Money } from '@/components/money';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { sumMinor } from '@/lib/money';
+import { logError, userMessage } from '@/lib/errors';
+import type { Account } from '@/types/domain';
+import { useLedger } from '@/app/DataProvider';
+import { setAccountArchived } from '@/services/repositories';
+import { accountTypeMeta } from '@/features/accounts/accountMeta';
+import { AccountFormDialog } from '@/features/accounts/AccountForm';
+import { AdjustBalanceDialog } from '@/features/accounts/AdjustBalanceDialog';
+import { DeleteAccountDialog } from '@/features/accounts/DeleteAccountDialog';
 
-interface Form {
-  name: string;
-  type: AccountType;
-  openingBalance: string;
-  creditLimit: string;
+/** Credit-card facts: what's available under the limit and how used it is. */
+export function CreditFacts({ account, className }: { account: Account; className?: string }) {
+  if (account.type !== 'credit-card' || !account.creditLimitMinor) return null;
+  const availableMinor = account.creditLimitMinor + Math.min(0, account.currentBalanceMinor);
+  const usedRatio = Math.min(
+    1,
+    Math.max(0, -account.currentBalanceMinor / account.creditLimitMinor),
+  );
+  return (
+    <div className={className}>
+      <div className="flex items-baseline justify-between text-xs text-muted-foreground">
+        <span>
+          <Money minor={availableMinor} className="text-xs" /> available
+        </span>
+        <span>
+          Limit <Money minor={account.creditLimitMinor} className="text-xs" />
+        </span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <div
+          className={
+            usedRatio >= 0.9 ? 'h-full rounded-full bg-expense' : 'h-full rounded-full bg-primary'
+          }
+          style={{ width: `${usedRatio * 100}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
-const accountTypes = [
-  { value: 'cash', label: 'Cash', icon: Banknote },
-  { value: 'checking', label: 'Checking', icon: Landmark },
-  { value: 'savings', label: 'Savings', icon: PiggyBank },
-  { value: 'credit-card', label: 'Credit card', icon: CreditCard },
-  { value: 'investment', label: 'Investment', icon: TrendingUp },
-  { value: 'loan', label: 'Loan', icon: WalletCards },
-] as const;
+function AccountCard({ account, onEdit }: { account: Account; onEdit: () => void }) {
+  const { uid } = useLedger();
+  const meta = accountTypeMeta[account.type];
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
-function parseStartingAmount(value: string) {
-  return /^(?:0+(?:\.0*)?|\.0+)?$/.test(value.trim()) || value.trim() === ''
-    ? 0
-    : parseMoney(value);
-}
+  async function toggleArchived() {
+    try {
+      await setAccountArchived(uid, account, !account.archived);
+      toast.success(account.archived ? 'Account restored' : 'Account archived');
+    } catch (error) {
+      logError('accounts', error);
+      toast.error(userMessage(error));
+    }
+  }
 
-function editableOpening(account: Account) {
-  const value =
-    account.type === 'credit-card'
-      ? Math.abs(account.openingBalanceMinor)
-      : account.openingBalanceMinor;
-  return (value / 100).toFixed(2);
+  return (
+    <Card className={account.archived ? 'opacity-60' : undefined}>
+      <CardContent className="flex items-start justify-between gap-3">
+        <Link
+          to={`/accounts/${account.id}`}
+          className="min-w-0 flex-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <meta.icon className="size-4" />
+            <span className="text-xs font-medium">{meta.label}</span>
+            {account.archived && <Badge variant="secondary">Archived</Badge>}
+          </div>
+          <p className="mt-1 truncate font-medium">{account.name}</p>
+          <Money
+            minor={account.currentBalanceMinor}
+            tone={account.currentBalanceMinor < 0 ? 'expense' : 'neutral'}
+            className="mt-2 block text-2xl font-semibold"
+          />
+          <CreditFacts account={account} className="mt-2" />
+        </Link>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label={`Actions for ${account.name}`}>
+              <MoreVertical />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={onEdit}>
+              <Pencil /> Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setAdjustOpen(true)}>
+              <Scale /> Adjust balance
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void toggleArchived()}>
+              {account.archived ? (
+                <>
+                  <ArchiveRestore /> Restore
+                </>
+              ) : (
+                <>
+                  <Archive /> Archive
+                </>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
+              <Trash2 /> Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <AdjustBalanceDialog account={account} open={adjustOpen} onOpenChange={setAdjustOpen} />
+        <DeleteAccountDialog account={account} open={deleteOpen} onOpenChange={setDeleteOpen} />
+      </CardContent>
+    </Card>
+  );
 }
 
 export function AccountsPage() {
-  const { accounts } = useData();
-  const { user } = useAuth();
-  const [show, setShow] = useState(false);
-  const [editingId, setEditingId] = useState<string>();
-  const [pendingArchiveId, setPendingArchiveId] = useState<string>();
-  const {
-    register,
-    handleSubmit,
-    reset,
-    watch,
-    setValue,
-    formState: { errors, isSubmitting },
-  } = useForm<Form>({
-    defaultValues: { type: 'checking', openingBalance: '0.00', creditLimit: '' },
-  });
-  const selectedType = watch('type');
+  const { accounts, activeAccounts, loading } = useLedger();
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Account | undefined>();
+  const [showArchived, setShowArchived] = useState(false);
 
-  const openCreate = () => {
-    setEditingId(undefined);
-    reset({ name: '', type: 'checking', openingBalance: '0.00', creditLimit: '' });
-    setShow(true);
-  };
-  const openEdit = (account: Account) => {
-    setEditingId(account.id);
-    reset({
-      name: account.name,
-      type: account.type,
-      openingBalance: editableOpening(account),
-      creditLimit:
-        account.creditLimitMinor === undefined ? '' : (account.creditLimitMinor / 100).toFixed(2),
-    });
-    setShow(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-  const submit = handleSubmit(async (value) => {
-    if (!user) return;
-    try {
-      const accountType = editingId
-        ? (accounts.find((account) => account.id === editingId)?.type ?? value.type)
-        : value.type;
-      const enteredOpening = parseStartingAmount(value.openingBalance);
-      await saveAccount(
-        user.uid,
-        {
-          name: value.name.trim(),
-          type: accountType,
-          currency: 'USD',
-          openingBalanceMinor: accountType === 'credit-card' ? -enteredOpening : enteredOpening,
-          creditLimitMinor:
-            accountType === 'credit-card' && value.creditLimit.trim()
-              ? parseMoney(value.creditLimit)
-              : undefined,
-        },
-        editingId,
-      );
-      toast.success(editingId ? 'Account updated' : 'Account created');
-      setShow(false);
-      setEditingId(undefined);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save account');
-    }
-  });
+  const archived = accounts.filter((account) => account.archived);
+  const netWorth = sumMinor(activeAccounts.map((account) => account.currentBalanceMinor));
 
-  const setArchived = async (account: Account) => {
-    if (!user || pendingArchiveId) return;
-    const willArchive = !account.archived;
-    setPendingArchiveId(account.id);
-    try {
-      await archiveAccount(user.uid, account.id, willArchive);
-      toast.success(willArchive ? 'Account archived' : 'Account restored');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not update account');
-    } finally {
-      setPendingArchiveId(undefined);
-    }
-  };
+  function openCreate() {
+    setEditing(undefined);
+    setFormOpen(true);
+  }
 
   return (
     <Page
-      eyebrow="Your balances"
       title="Accounts"
-      action={
+      description="Everywhere your money lives."
+      actions={
         <Button onClick={openCreate}>
-          <Plus size={18} />
-          New account
+          <Plus /> New account
         </Button>
       }
     >
-      {show && (
-        <section className="mb-8 border-y py-6">
-          <div className="mb-6 flex items-start justify-between gap-4">
-            <div>
-              <h2 className="font-display text-xl">
-                {editingId ? 'Edit account' : 'Add an account'}
-              </h2>
-              <p className="mt-1 text-sm opacity-65">
-                Credit cards track debt; bank and savings accounts track money you own.
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setShow(false);
-                setEditingId(undefined);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-          <form onSubmit={submit} className="space-y-5">
-            <fieldset aria-describedby={editingId ? 'account-type-lock-note' : undefined}>
-              <legend className="label">Account type</legend>
-              {editingId ? (
-                <div className="py-2">
-                  {accountTypes
-                    .filter(({ value }) => value === selectedType)
-                    .map(({ value, label, icon: Icon }) => (
-                      <div key={value} className="flex items-center gap-3">
-                        <span className="grid size-10 place-items-center rounded-xl bg-mist text-jade dark:bg-white/10 dark:text-white">
-                          <Icon size={20} aria-hidden="true" />
-                        </span>
-                        <div>
-                          <p className="font-semibold">{label}</p>
-                          <p
-                            id="account-type-lock-note"
-                            className="mt-0.5 max-w-3xl text-sm text-ink/60 dark:text-white/60"
-                          >
-                            Account type is locked after creation because changing between money you
-                            own and debt would change the meaning of every existing balance. Create
-                            a new account if you need a different type.
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                  {accountTypes.map(({ value, label, icon: Icon }) => (
-                    <button
-                      type="button"
-                      key={value}
-                      aria-pressed={selectedType === value}
-                      className={`flex min-h-20 flex-col items-center justify-center gap-2 rounded-xl border px-2 text-sm font-semibold transition-colors ${
-                        selectedType === value
-                          ? 'border-jade bg-jade text-white'
-                          : 'bg-white/60 hover:border-jade/50 dark:bg-white/[.04]'
-                      }`}
-                      onClick={() => setValue('type', value, { shouldDirty: true })}
-                    >
-                      <Icon size={20} />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <input type="hidden" {...register('type')} />
-            </fieldset>
-            <div className="grid gap-4 md:grid-cols-3">
-              <Field label="Account name" error={errors.name?.message}>
-                <input
-                  className="input"
-                  {...register('name', { required: 'Enter a name' })}
-                  aria-invalid={Boolean(errors.name)}
-                />
-              </Field>
-              <Field
-                label={selectedType === 'credit-card' ? 'Opening amount owed' : 'Opening balance'}
-              >
-                <input
-                  className="input amount"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  {...register('openingBalance')}
-                />
-                {selectedType === 'credit-card' && (
-                  <span className="mt-1.5 block text-xs opacity-55">
-                    This is the debt when tracking begins; entries determine the current amount
-                    owed.
-                  </span>
-                )}
-              </Field>
-              {selectedType === 'credit-card' && (
-                <Field label="Credit limit (optional)">
-                  <input
-                    className="input amount"
-                    inputMode="decimal"
-                    placeholder="5,000.00"
-                    {...register('creditLimit')}
-                  />
-                </Field>
-              )}
-            </div>
-            <Button disabled={isSubmitting}>
-              {isSubmitting ? 'Saving…' : editingId ? 'Update account' : 'Save account'}
-            </Button>
-          </form>
-        </section>
-      )}
-      {accounts.length ? (
-        <section aria-label="Accounts" className="border-y">
-          {accounts.map((account) => (
-            <AccountRow
-              key={account.id}
-              account={account}
-              onEdit={() => openEdit(account)}
-              onArchive={() => setArchived(account)}
-              archivePending={pendingArchiveId === account.id}
-              archiveDisabled={Boolean(pendingArchiveId)}
-            />
+      {loading ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }, (_, index) => (
+            <Skeleton key={index} className="h-32" />
           ))}
-        </section>
-      ) : (
+        </div>
+      ) : accounts.length === 0 ? (
         <EmptyState
-          title="Create your first account"
-          detail="Add cash, checking, savings, or a credit card to begin your ledger."
-        />
-      )}
-    </Page>
-  );
-}
-
-function AccountRow({
-  account,
-  onEdit,
-  onArchive,
-  archivePending,
-  archiveDisabled,
-}: {
-  account: Account;
-  onEdit: () => void;
-  onArchive: () => Promise<void>;
-  archivePending: boolean;
-  archiveDisabled: boolean;
-}) {
-  const view = accountBalanceView(account);
-  const isCredit = account.type === 'credit-card';
-  const Icon = accountTypes.find(({ value }) => value === account.type)?.icon ?? WalletCards;
-  return (
-    <article
-      className={`group border-b py-5 last:border-b-0 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-8 ${
-        account.archived ? 'opacity-55' : ''
-      }`}
-    >
-      <Link
-        to={`/accounts/${account.id}`}
-        className="group/account grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-3 rounded-lg focus-visible:ring-offset-4 md:grid-cols-[auto_minmax(0,1fr)_auto]"
-      >
-        <span
-          className={`row-span-2 grid size-10 shrink-0 place-items-center rounded-full md:row-span-1 ${
-            isCredit
-              ? 'bg-apricot/20 text-[#914027] dark:bg-apricot/20 dark:text-apricot'
-              : 'bg-mist text-jade'
-          }`}
-        >
-          <Icon size={19} aria-hidden="true" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="truncate font-display text-lg transition-colors group-hover/account:text-jade">
-              {account.name}
-            </span>
-            <span className="text-sm capitalize text-ink/55 dark:text-white/55">
-              {account.type.replace('-', ' ')}
-            </span>
-            {account.archived && (
-              <span className="text-xs font-semibold text-ink/55 dark:text-white/55">Archived</span>
-            )}
-          </span>
-          <span className="mt-2 block text-sm text-ink/60 dark:text-white/60">
-            {isCredit
-              ? `Available ${
-                  view.availableMinor === undefined
-                    ? 'not set'
-                    : formatMoney(view.availableMinor, account.currency)
-                } · Limit ${
-                  account.creditLimitMinor === undefined
-                    ? 'not set'
-                    : formatMoney(account.creditLimitMinor, account.currency)
-                }`
-              : `Opened at ${formatMoney(account.openingBalanceMinor, account.currency)}`}
-          </span>
-        </span>
-        <span className="col-start-2 shrink-0 text-left md:col-start-3 md:row-start-1 md:text-right">
-          <span className="block text-sm text-ink/55 dark:text-white/55">{view.label}</span>
-          <span
-            className={`amount mt-1 block text-xl font-semibold ${
-              isCredit ? 'text-[#914027] dark:text-apricot' : ''
-            }`}
-          >
-            {formatMoney(view.primaryMinor, account.currency)}
-          </span>
-        </span>
-      </Link>
-      <div className="mt-3 flex justify-end gap-1 sm:mt-0">
-        <Button variant="ghost" onClick={onEdit}>
-          <Pencil size={16} />
-          Edit
-        </Button>
-        <ConfirmDialog
-          trigger={
-            <Button variant="ghost" disabled={archiveDisabled} aria-busy={archivePending}>
-              {archivePending ? (
-                <Loader2 size={16} className="animate-spin motion-reduce:animate-none" />
-              ) : account.archived ? (
-                <RotateCcw size={16} />
-              ) : (
-                <Archive size={16} />
-              )}
-              {archivePending
-                ? account.archived
-                  ? 'Restoring…'
-                  : 'Archiving…'
-                : account.archived
-                  ? 'Restore'
-                  : 'Archive'}
+          icon={Wallet}
+          title="No accounts yet"
+          description="Start by adding the account you use most — checking, cash, or a card."
+          action={
+            <Button onClick={openCreate}>
+              <Plus /> New account
             </Button>
           }
-          title={`${account.archived ? 'Restore' : 'Archive'} “${account.name}”?`}
-          description={
-            account.archived
-              ? 'This account will be available for new entries and transfers again.'
-              : 'Existing entries and balances stay in your history, but this account will no longer be available for new entries or transfers.'
-          }
-          onConfirm={onArchive}
         />
-      </div>
-    </article>
-  );
-}
-
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label>
-      <span className="label">{label}</span>
-      {children}
-      {error && <span className="mt-1 block text-sm text-apricot">{error}</span>}
-    </label>
+      ) : (
+        <>
+          <div className="mb-6 flex items-baseline gap-3">
+            <span className="text-sm text-muted-foreground">Net total</span>
+            <Money
+              minor={netWorth}
+              tone={netWorth < 0 ? 'expense' : 'neutral'}
+              className="text-xl font-semibold"
+            />
+          </div>
+          <section aria-label="Accounts" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {activeAccounts.map((account) => (
+              <AccountCard
+                key={account.id}
+                account={account}
+                onEdit={() => {
+                  setEditing(account);
+                  setFormOpen(true);
+                }}
+              />
+            ))}
+          </section>
+          {archived.length > 0 && (
+            <div className="mt-8">
+              <Button variant="ghost" size="sm" onClick={() => setShowArchived((value) => !value)}>
+                {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+              </Button>
+              {showArchived && (
+                <section
+                  aria-label="Archived accounts"
+                  className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+                >
+                  {archived.map((account) => (
+                    <AccountCard
+                      key={account.id}
+                      account={account}
+                      onEdit={() => {
+                        setEditing(account);
+                        setFormOpen(true);
+                      }}
+                    />
+                  ))}
+                </section>
+              )}
+            </div>
+          )}
+        </>
+      )}
+      <AccountFormDialog account={editing} open={formOpen} onOpenChange={setFormOpen} />
+    </Page>
   );
 }

@@ -1,32 +1,62 @@
-import type { Timestamp } from 'firebase/firestore';
-import type { CategoryIconId } from '@/lib/categoryIcons';
-export type DateValue = Date | Timestamp;
-export interface Audited {
+import { z } from 'zod';
+
+export const accountTypes = [
+  'cash',
+  'checking',
+  'savings',
+  'credit-card',
+  'investment',
+  'loan',
+] as const;
+export const accountTypeSchema = z.enum(accountTypes);
+export type AccountType = z.infer<typeof accountTypeSchema>;
+
+export const transactionTypes = ['income', 'expense', 'transfer'] as const;
+export const transactionTypeSchema = z.enum(transactionTypes);
+export type TransactionType = z.infer<typeof transactionTypeSchema>;
+
+export const categoryTypeSchema = z.enum(['income', 'expense']);
+export type CategoryType = z.infer<typeof categoryTypeSchema>;
+
+export const transactionSourceSchema = z.enum(['manual', 'csv-import', 'recurring']);
+export type TransactionSource = z.infer<typeof transactionSourceSchema>;
+
+export const recurrenceFrequencies = ['weekly', 'biweekly', 'monthly', 'yearly'] as const;
+export const recurrenceFrequencySchema = z.enum(recurrenceFrequencies);
+export type RecurrenceFrequency = z.infer<typeof recurrenceFrequencySchema>;
+
+/** Positive amount in minor units (integer cents). */
+export const amountMinorSchema = z.number().int().positive();
+/** Budget period key, e.g. "2026-07". */
+export const periodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use the YYYY-MM format');
+
+export interface Account {
   id: string;
-  createdAt: DateValue;
-  updatedAt: DateValue;
-}
-export type AccountType = 'cash' | 'checking' | 'savings' | 'credit-card' | 'investment' | 'loan';
-export interface Account extends Audited {
   name: string;
   type: AccountType;
   currency: string;
   openingBalanceMinor: number;
   currentBalanceMinor: number;
+  /** Credit cards only: spending limit; available = limit + balance (balance is negative when owing). */
   creditLimitMinor?: number;
   archived: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
-export type CategoryType = 'income' | 'expense';
-export interface Category extends Audited {
+
+export interface Category {
+  id: string;
   name: string;
   type: CategoryType;
-  /** Stable semantic ID; legacy or missing stored values normalize to `general` on read. */
-  icon: CategoryIconId;
+  icon: string;
   parentCategoryId?: string;
   archived: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
-export type TransactionType = 'income' | 'expense' | 'transfer';
-export interface Transaction extends Audited {
+
+export interface Transaction {
+  id: string;
   type: TransactionType;
   accountId: string;
   destinationAccountId?: string;
@@ -37,53 +67,75 @@ export interface Transaction extends Audited {
   description: string;
   notes?: string;
   tags: string[];
-  occurredAt: DateValue;
+  occurredAt: Date;
   transferId?: string;
-  transferRole?: 'source' | 'destination';
   recurringTransactionId?: string;
-  source: 'manual' | 'csv-import' | 'recurring';
-  fingerprint: string;
+  source: TransactionSource;
+  createdAt: Date;
+  updatedAt: Date;
 }
-export interface Budget extends Audited {
+
+export interface Budget {
+  id: string;
   categoryId: string;
   period: string;
   limitMinor: number;
   warningThreshold: number;
   rollover: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
-export type Frequency = 'weekly' | 'biweekly' | 'monthly' | 'yearly';
-export interface RecurringTransaction extends Audited {
-  type: 'income' | 'expense';
+
+export interface RecurringTransaction {
+  id: string;
+  type: Exclude<TransactionType, 'transfer'>;
   accountId: string;
   categoryId: string;
   amountMinor: number;
   currency: string;
   description: string;
-  frequency: Frequency;
+  frequency: RecurrenceFrequency;
   interval: number;
-  nextOccurrence: DateValue;
-  scheduleAnchorDay: number;
-  endDate?: DateValue;
+  nextOccurrence: Date;
+  /** Day-of-month the schedule anchors to, so Jan 31 → Feb 28 → Mar 31. */
+  anchorDay?: number;
+  endDate?: Date;
   active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
-export interface ProfileSettings {
-  currency: string;
-  locale: string;
-  timeZone: string;
-  weekStartsOn: 0 | 1 | 2 | 3 | 4 | 5 | 6;
-  theme: 'light' | 'dark' | 'system';
-}
-export interface ImportRecord extends Audited {
+
+export interface ImportRecord {
+  id: string;
   fileName: string;
   accountId: string;
-  imported: number;
-  skipped: number;
-  duplicates: number;
+  rowCount: number;
+  importedCount: number;
+  duplicateCount: number;
+  createdAt: Date;
 }
-export const defaultSettings: ProfileSettings = {
+
+export const weekStartSchema = z.union([z.literal(0), z.literal(1)]);
+
+// Per-field .catch: a settings doc written by an older app version (missing or
+// odd fields) degrades field-by-field instead of collapsing to full defaults —
+// crucially, a valid categoriesSeeded flag always survives.
+export const settingsSchema = z.object({
+  currency: z.string().length(3).catch('USD'),
+  locale: z.string().min(2).catch('en-US'),
+  timeZone: z.string().min(1).catch('America/Panama'),
+  /** 0 = Sunday, 1 = Monday. */
+  weekStartsOn: weekStartSchema.catch(1),
+  offlineWarningAcknowledged: z.boolean().catch(false),
+  categoriesSeeded: z.boolean().catch(false),
+});
+export type Settings = z.infer<typeof settingsSchema>;
+
+export const defaultSettings: Settings = {
   currency: 'USD',
   locale: 'en-US',
   timeZone: 'America/Panama',
   weekStartsOn: 1,
-  theme: 'system',
+  offlineWarningAcknowledged: false,
+  categoriesSeeded: false,
 };

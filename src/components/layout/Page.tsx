@@ -1,25 +1,29 @@
-import type { ReactNode } from 'react';
+import { cn } from '@/lib/utils';
+
+/** Standard page chrome: constrained width, title row, optional actions. */
 export function Page({
   title,
-  eyebrow,
-  action,
+  description,
+  actions,
   children,
+  className,
 }: {
   title: string;
-  eyebrow?: string;
-  action?: ReactNode;
-  children: ReactNode;
+  description?: string;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="mx-auto max-w-[90rem] p-4 sm:p-7 lg:p-10">
-      <header className="mb-7 flex items-end justify-between gap-4">
+    <main className={cn('mx-auto w-full max-w-5xl p-4 md:p-8', className)}>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          {eyebrow && <p className="eyebrow mb-2">{eyebrow}</p>}
-          <h1 className="font-display text-3xl sm:text-4xl">{title}</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">{title}</h1>
+          {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
         </div>
-        {action}
-      </header>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </div>
       {children}
-    </div>
+    </main>
   );
 }

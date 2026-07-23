@@ -1,599 +1,445 @@
 import {
-  addDoc,
+  Timestamp,
   collection,
-  deleteField,
   deleteDoc,
+  deleteField,
   doc,
-  documentId,
   getDoc,
   getDocs,
-  increment,
   limit,
-  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   setDoc,
-  Timestamp,
+  startAfter,
   updateDoc,
   where,
   writeBatch,
-  type DocumentData,
-  type QueryConstraint,
-  type Unsubscribe,
+  type DocumentReference,
+  type DocumentSnapshot,
+  type Query,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore';
+import { z } from 'zod';
 import { db } from '@/lib/firebase';
-import { DEFAULT_CATEGORY_ICON, normalizeCategoryIcon } from '@/lib/categoryIcons';
-import { monthRange } from '@/lib/dates';
-import { categorySchema } from '@/lib/validation';
-import { transactionEffect } from '@/services/finance';
-import { advanceOccurrence, asDate } from '@/lib/dates';
-import type {
-  Account,
-  Budget,
-  Category,
-  ImportRecord,
-  ProfileSettings,
-  RecurringTransaction,
-  Transaction,
+import { defaultCategorySeeds } from '@/lib/categories';
+import { AppError } from '@/lib/errors';
+import {
+  accountTypeSchema,
+  categoryTypeSchema,
+  defaultSettings,
+  periodSchema,
+  recurrenceFrequencySchema,
+  settingsSchema,
+  transactionSourceSchema,
+  transactionTypeSchema,
+  type Account,
+  type Budget,
+  type Category,
+  type ImportRecord,
+  type RecurringTransaction,
+  type Settings,
+  type Transaction,
 } from '@/types/domain';
-const path = (uid: string, name: string) => collection(db, 'users', uid, name);
-const withId = <T>(data: DocumentData, id: string) => ({ ...data, id }) as T;
-export function subscribeCollection<T>(
-  uid: string,
-  name: string,
-  callback: (items: T[]) => void,
-  ...constraints: QueryConstraint[]
-): Unsubscribe {
-  return onSnapshot(query(path(uid, name), ...constraints), (snapshot) =>
-    callback(snapshot.docs.map((item) => withId<T>(item.data(), item.id))),
-  );
+
+/**
+ * All Firestore access lives here. Documents are validated with Zod on read,
+ * so a corrupt document fails loudly instead of silently breaking balances.
+ */
+
+const timestampSchema = z.instanceof(Timestamp);
+
+export const accountsCol = (uid: string) => collection(db, 'users', uid, 'accounts');
+export const categoriesCol = (uid: string) => collection(db, 'users', uid, 'categories');
+export const transactionsCol = (uid: string) => collection(db, 'users', uid, 'transactions');
+export const budgetsCol = (uid: string) => collection(db, 'users', uid, 'budgets');
+export const recurringCol = (uid: string) => collection(db, 'users', uid, 'recurringTransactions');
+export const importsCol = (uid: string) => collection(db, 'users', uid, 'imports');
+export const settingsDoc = (uid: string) => doc(db, 'users', uid, 'settings', 'profile');
+
+function data(snap: DocumentSnapshot | QueryDocumentSnapshot): Record<string, unknown> {
+  const value = snap.data({ serverTimestamps: 'estimate' });
+  if (!value) throw new AppError('Document is missing.');
+  return value;
 }
-export const subscribeAccounts = (uid: string, cb: (v: Account[]) => void) =>
-  subscribeCollection(uid, 'accounts', cb, orderBy('name'));
-export const subscribeCategories = (uid: string, cb: (v: Category[]) => void) =>
-  onSnapshot(query(path(uid, 'categories'), orderBy('name')), (snapshot) =>
-    cb(snapshot.docs.map((item) => categorySchema.parse(withId(item.data(), item.id)) as Category)),
-  );
-export const subscribeBudgets = (uid: string, period: string, cb: (v: Budget[]) => void) =>
-  subscribeCollection(uid, 'budgets', cb, where('period', '==', period));
-export const subscribeRecurring = (uid: string, cb: (v: RecurringTransaction[]) => void) =>
-  subscribeCollection(uid, 'recurringTransactions', cb, orderBy('nextOccurrence'), limit(100));
-export function subscribeMonthTransactions(
-  uid: string,
-  date: Date,
-  cb: (v: Transaction[]) => void,
-) {
-  const { start, end } = monthRange(date);
-  return subscribeCollection(
-    uid,
-    'transactions',
-    cb,
-    where('occurredAt', '>=', Timestamp.fromDate(start)),
-    where('occurredAt', '<', Timestamp.fromDate(end)),
-    orderBy('occurredAt', 'desc'),
-    limit(500),
-  );
+
+// --- Accounts ---
+
+const accountDocSchema = z.object({
+  name: z.string(),
+  type: accountTypeSchema,
+  currency: z.string(),
+  openingBalanceMinor: z.number().int(),
+  currentBalanceMinor: z.number().int(),
+  creditLimitMinor: z.number().int().positive().optional(),
+  archived: z.boolean(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export function parseAccount(snap: DocumentSnapshot): Account {
+  const parsed = accountDocSchema.parse(data(snap));
+  return {
+    ...parsed,
+    id: snap.id,
+    createdAt: parsed.createdAt.toDate(),
+    updatedAt: parsed.updatedAt.toDate(),
+  };
 }
-export async function saveAccount(
-  uid: string,
-  input: Pick<Account, 'name' | 'type' | 'currency' | 'openingBalanceMinor' | 'creditLimitMinor'>,
-  id?: string,
-) {
-  const openingBalanceMinor = input.openingBalanceMinor === 0 ? 0 : input.openingBalanceMinor;
-  const ref = id ? doc(path(uid, 'accounts'), id) : doc(path(uid, 'accounts'));
-  const existing = id ? await getDoc(ref) : undefined;
-  if (id && (!existing || !existing.exists())) throw new Error('Account not found');
-  const existingData = existing?.data() as Partial<Account> | undefined;
-  if (existingData) {
-    if (existingData.type && existingData.type !== input.type) {
-      throw new Error('Account type cannot be changed after creation.');
-    }
-    const openingDelta = openingBalanceMinor - (existingData.openingBalanceMinor ?? 0);
-    await updateDoc(ref, {
-      ...input,
-      openingBalanceMinor,
-      archived: existingData.archived ?? false,
-      creditLimitMinor:
-        input.type === 'credit-card' && input.creditLimitMinor !== undefined
-          ? input.creditLimitMinor
-          : deleteField(),
-      currentBalanceMinor: increment(openingDelta),
-      updatedAt: serverTimestamp(),
-    });
-    return;
-  }
+
+export interface AccountInput {
+  name: string;
+  type: Account['type'];
+  currency: string;
+  openingBalanceMinor: number;
+  creditLimitMinor?: number;
+}
+
+export async function createAccount(uid: string, input: AccountInput): Promise<string> {
+  const ref = doc(accountsCol(uid));
   await setDoc(ref, {
     ...input,
-    openingBalanceMinor,
-    currentBalanceMinor: openingBalanceMinor,
+    currentBalanceMinor: input.openingBalanceMinor,
     archived: false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
-}
-export async function archiveAccount(uid: string, id: string, archived = true) {
-  await updateDoc(doc(path(uid, 'accounts'), id), { archived, updatedAt: serverTimestamp() });
-}
-export async function saveCategory(
-  uid: string,
-  input: Pick<Category, 'name' | 'type' | 'parentCategoryId'> & { icon?: unknown },
-  id?: string,
-) {
-  const categorySnapshot = await getDocs(path(uid, 'categories'));
-  const categories = categorySnapshot.docs.map((item) => withId<Category>(item.data(), item.id));
-  const parentProblem = validateCategoryParent(categories, id, input.parentCategoryId, input.type);
-  if (parentProblem) throw new Error(parentProblem);
-  const duplicate = categories.some(
-    (category) =>
-      category.id !== id &&
-      category.type === input.type &&
-      (category.parentCategoryId ?? '') === (input.parentCategoryId ?? '') &&
-      category.name.trim().toLocaleLowerCase('en-US') ===
-        input.name.trim().toLocaleLowerCase('en-US'),
-  );
-  if (duplicate) throw new Error('A category with this name already exists at that level.');
-  const ref = id ? doc(path(uid, 'categories'), id) : doc(path(uid, 'categories'));
-  const existing = id ? await getDoc(ref) : undefined;
-  if (id && (!existing || !existing.exists())) throw new Error('Category not found');
-  const existingData = existing?.exists() ? (existing.data() as Partial<Category>) : undefined;
-  if (
-    id &&
-    existingData?.type !== undefined &&
-    existingData.type !== input.type &&
-    categories.some((category) => category.parentCategoryId === id)
-  )
-    throw new Error('Move or archive nested categories before changing this category type.');
-  await setDoc(
-    ref,
-    {
-      ...input,
-      icon: normalizeCategoryIcon(input.icon),
-      parentCategoryId: input.parentCategoryId || deleteField(),
-      archived: existingData?.archived ?? false,
-      createdAt: existingData?.createdAt ?? serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
+  return ref.id;
 }
 
-export async function archiveCategory(uid: string, id: string, archived = true) {
-  await updateDoc(doc(path(uid, 'categories'), id), { archived, updatedAt: serverTimestamp() });
-}
-
-export function validateCategoryParent(
-  categories: readonly Category[],
-  categoryId?: string,
-  parentId?: string,
-  categoryType?: Category['type'],
-): string | null {
-  if (!parentId) return null;
-  if (categoryId === parentId) return 'A category cannot be its own parent.';
-  const category = categoryId ? categories.find((item) => item.id === categoryId) : undefined;
-  let parent = categories.find((item) => item.id === parentId);
-  if (!parent) return 'Choose an existing parent category.';
-  if (parent.archived) return 'Restore the parent category before using it.';
-  const childType = category?.type ?? categoryType;
-  if (childType && parent.type !== childType)
-    return 'Parent and child categories must have the same type.';
-  const visited = new Set<string>();
-  while (parent) {
-    if (parent.id === categoryId) return 'That parent would create a category loop.';
-    if (visited.has(parent.id)) return 'The existing category tree contains a loop.';
-    visited.add(parent.id);
-    parent = parent.parentCategoryId
-      ? categories.find((item) => item.id === parent?.parentCategoryId)
-      : undefined;
-  }
-  return null;
-}
-export async function saveBudget(
+/** Editing the opening balance shifts the current balance by the same delta. */
+export async function updateAccount(
   uid: string,
-  input: Pick<Budget, 'categoryId' | 'period' | 'limitMinor' | 'warningThreshold' | 'rollover'>,
-  id?: string,
-) {
-  const ref = id ? doc(path(uid, 'budgets'), id) : doc(path(uid, 'budgets'));
-  await setDoc(
-    ref,
-    { ...input, createdAt: serverTimestamp(), updatedAt: serverTimestamp() },
-    { merge: true },
-  );
-}
-export async function saveRecurring(
-  uid: string,
-  input: Omit<RecurringTransaction, 'id' | 'createdAt' | 'updatedAt'>,
-  id?: string,
-) {
-  const ref = id
-    ? doc(path(uid, 'recurringTransactions'), id)
-    : doc(path(uid, 'recurringTransactions'));
-  await setDoc(
-    ref,
-    {
-      ...input,
-      nextOccurrence: Timestamp.fromDate(input.nextOccurrence as Date),
-      endDate: input.endDate ? Timestamp.fromDate(input.endDate as Date) : null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-}
-export async function setRecurringActive(uid: string, id: string, active: boolean) {
-  await updateDoc(doc(path(uid, 'recurringTransactions'), id), {
-    active,
+  account: Account,
+  input: AccountInput,
+): Promise<void> {
+  const openingDelta = input.openingBalanceMinor - account.openingBalanceMinor;
+  await updateDoc(doc(accountsCol(uid), account.id), {
+    ...input,
+    creditLimitMinor: input.creditLimitMinor ?? deleteField(),
+    currentBalanceMinor: account.currentBalanceMinor + openingDelta,
     updatedAt: serverTimestamp(),
   });
 }
-export async function deleteRecurring(uid: string, id: string) {
-  await deleteDoc(doc(path(uid, 'recurringTransactions'), id));
+
+export async function setAccountArchived(
+  uid: string,
+  account: Account,
+  archived: boolean,
+): Promise<void> {
+  await updateDoc(doc(accountsCol(uid), account.id), { archived, updatedAt: serverTimestamp() });
 }
-export async function advanceRecurring(uid: string, item: RecurringTransaction) {
-  const next = advanceOccurrence(
-    asDate(item.nextOccurrence),
-    item.frequency,
-    item.interval,
-    item.scheduleAnchorDay,
-  );
-  await updateDoc(doc(path(uid, 'recurringTransactions'), item.id), {
-    nextOccurrence: Timestamp.fromDate(next),
-    active: item.endDate ? next <= asDate(item.endDate) : true,
+
+// --- Categories ---
+
+const categoryDocSchema = z.object({
+  name: z.string(),
+  type: categoryTypeSchema,
+  icon: z.string().default('other'),
+  parentCategoryId: z.string().optional(),
+  archived: z.boolean(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export function parseCategory(snap: DocumentSnapshot): Category {
+  const parsed = categoryDocSchema.parse(data(snap));
+  return {
+    ...parsed,
+    id: snap.id,
+    createdAt: parsed.createdAt.toDate(),
+    updatedAt: parsed.updatedAt.toDate(),
+  };
+}
+
+export interface CategoryInput {
+  name: string;
+  type: Category['type'];
+  icon: string;
+  parentCategoryId?: string;
+}
+
+export async function createCategory(uid: string, input: CategoryInput): Promise<string> {
+  const ref = doc(categoriesCol(uid));
+  await setDoc(ref, {
+    ...input,
+    archived: false,
+    createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  return ref.id;
 }
-export interface TransactionInput {
+
+export async function updateCategory(
+  uid: string,
+  id: string,
+  input: Partial<CategoryInput> & { archived?: boolean },
+): Promise<void> {
+  await updateDoc(doc(categoriesCol(uid), id), { ...input, updatedAt: serverTimestamp() });
+}
+
+/** Transactions that referenced it simply show as "Uncategorized". */
+export async function deleteCategory(uid: string, id: string): Promise<void> {
+  await deleteDoc(doc(categoriesCol(uid), id));
+}
+
+// --- Transactions ---
+
+const transactionDocSchema = z.object({
+  type: transactionTypeSchema,
+  accountId: z.string(),
+  destinationAccountId: z.string().optional(),
+  categoryId: z.string().optional(),
+  amountMinor: z.number().int().positive(),
+  currency: z.string(),
+  merchant: z.string().optional(),
+  description: z.string(),
+  notes: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  occurredAt: timestampSchema,
+  transferId: z.string().optional(),
+  recurringTransactionId: z.string().optional(),
+  source: transactionSourceSchema,
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export function parseTransaction(snap: DocumentSnapshot): Transaction {
+  const parsed = transactionDocSchema.parse(data(snap));
+  return {
+    ...parsed,
+    id: snap.id,
+    occurredAt: parsed.occurredAt.toDate(),
+    createdAt: parsed.createdAt.toDate(),
+    updatedAt: parsed.updatedAt.toDate(),
+  };
+}
+
+/** Firestore document payload for a transaction (used by finance service batches). */
+export function transactionDocData(
+  txn: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>,
+): Record<string, unknown> {
+  return {
+    ...txn,
+    occurredAt: Timestamp.fromDate(txn.occurredAt),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+export function transactionsInRange(uid: string, start: Date, end: Date): Query {
+  return query(
+    transactionsCol(uid),
+    where('occurredAt', '>=', Timestamp.fromDate(start)),
+    where('occurredAt', '<', Timestamp.fromDate(end)),
+    orderBy('occurredAt', 'desc'),
+  );
+}
+
+export function accountTransactionsPage(
+  uid: string,
+  accountId: string,
+  pageSize: number,
+  cursor?: QueryDocumentSnapshot,
+): Query {
+  const parts = [
+    where('accountId', '==', accountId),
+    orderBy('occurredAt', 'desc'),
+    limit(pageSize),
+  ];
+  return cursor
+    ? query(transactionsCol(uid), ...parts.slice(0, 2), startAfter(cursor), limit(pageSize))
+    : query(transactionsCol(uid), ...parts);
+}
+
+export async function getTransaction(uid: string, id: string): Promise<Transaction> {
+  const snap = await getDoc(doc(transactionsCol(uid), id));
+  if (!snap.exists()) throw new AppError('That transaction no longer exists.');
+  return parseTransaction(snap);
+}
+
+/** Both legs of a transfer, source leg first. */
+export async function getTransferPair(uid: string, transferId: string): Promise<Transaction[]> {
+  const snap = await getDocs(query(transactionsCol(uid), where('transferId', '==', transferId)));
+  const legs = snap.docs.map(parseTransaction);
+  return legs.sort((a, b) => (a.destinationAccountId ? -1 : 0) - (b.destinationAccountId ? -1 : 0));
+}
+
+// --- Budgets ---
+
+const budgetDocSchema = z.object({
+  categoryId: z.string(),
+  period: periodSchema,
+  limitMinor: z.number().int().positive(),
+  warningThreshold: z.number().min(0).max(1),
+  rollover: z.boolean(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export function parseBudget(snap: DocumentSnapshot): Budget {
+  const parsed = budgetDocSchema.parse(data(snap));
+  return {
+    ...parsed,
+    id: snap.id,
+    createdAt: parsed.createdAt.toDate(),
+    updatedAt: parsed.updatedAt.toDate(),
+  };
+}
+
+export interface BudgetInput {
+  categoryId: string;
+  period: string;
+  limitMinor: number;
+  warningThreshold: number;
+  rollover: boolean;
+}
+
+export async function saveBudget(uid: string, input: BudgetInput, id?: string): Promise<string> {
+  // One budget per category per month: deterministic id prevents duplicates.
+  const ref: DocumentReference = id
+    ? doc(budgetsCol(uid), id)
+    : doc(budgetsCol(uid), `${input.period}_${input.categoryId}`);
+  const existing = await getDoc(ref);
+  await setDoc(ref, {
+    ...input,
+    createdAt: existing.exists() ? existing.get('createdAt') : serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function deleteBudget(uid: string, id: string): Promise<void> {
+  await deleteDoc(doc(budgetsCol(uid), id));
+}
+
+// --- Recurring transactions ---
+
+const recurringDocSchema = z.object({
+  type: z.enum(['income', 'expense']),
+  accountId: z.string(),
+  categoryId: z.string(),
+  amountMinor: z.number().int().positive(),
+  currency: z.string(),
+  description: z.string(),
+  frequency: recurrenceFrequencySchema,
+  interval: z.number().int().positive(),
+  nextOccurrence: timestampSchema,
+  anchorDay: z.number().int().min(1).max(31).optional(),
+  endDate: timestampSchema.optional(),
+  active: z.boolean(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export function parseRecurring(snap: DocumentSnapshot): RecurringTransaction {
+  const parsed = recurringDocSchema.parse(data(snap));
+  return {
+    ...parsed,
+    id: snap.id,
+    nextOccurrence: parsed.nextOccurrence.toDate(),
+    endDate: parsed.endDate?.toDate(),
+    createdAt: parsed.createdAt.toDate(),
+    updatedAt: parsed.updatedAt.toDate(),
+  };
+}
+
+export interface RecurringInput {
   type: 'income' | 'expense';
   accountId: string;
   categoryId: string;
   amountMinor: number;
   currency: string;
   description: string;
-  merchant?: string;
-  notes?: string;
-  tags: string[];
-  occurredAt: Date;
-  source: Transaction['source'];
-  recurringTransactionId?: string;
-  fingerprint: string;
+  frequency: RecurringTransaction['frequency'];
+  interval: number;
+  nextOccurrence: Date;
+  anchorDay?: number;
+  endDate?: Date;
 }
-async function validateTransactionReferences(uid: string, input: TransactionInput) {
-  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
-    throw new Error('Amount must be greater than zero');
-  const [account, category] = await Promise.all([
-    getDoc(doc(path(uid, 'accounts'), input.accountId)),
-    getDoc(doc(path(uid, 'categories'), input.categoryId)),
-  ]);
-  if (!account.exists() || account.data().archived === true)
-    throw new Error('Select an active account');
-  if (!category.exists() || category.data().archived === true)
-    throw new Error('Select an active category');
-  if (category.data().type !== input.type)
-    throw new Error(
-      input.type === 'income'
-        ? 'Income requires an income category'
-        : 'Expenses require an expense category',
-    );
-  if (account.data().currency !== input.currency)
-    throw new Error('Account and transaction currencies must match');
-  return account;
-}
-export async function createTransaction(uid: string, input: TransactionInput) {
-  const accountRef = doc(path(uid, 'accounts'), input.accountId);
-  await validateTransactionReferences(uid, input);
-  const batch = writeBatch(db);
-  const ref = doc(path(uid, 'transactions'));
-  batch.set(ref, {
+
+function recurringDocData(input: RecurringInput) {
+  return {
     ...input,
-    occurredAt: Timestamp.fromDate(input.occurredAt),
-    createdAt: serverTimestamp(),
+    nextOccurrence: Timestamp.fromDate(input.nextOccurrence),
+    endDate: input.endDate ? Timestamp.fromDate(input.endDate) : undefined,
     updatedAt: serverTimestamp(),
-  });
-  batch.update(accountRef, {
-    currentBalanceMinor: increment(
-      input.type === 'income' ? input.amountMinor : -input.amountMinor,
-    ),
-    updatedAt: serverTimestamp(),
-  });
-  await batch.commit();
+  };
+}
+
+export async function createRecurring(uid: string, input: RecurringInput): Promise<string> {
+  const ref = doc(recurringCol(uid));
+  await setDoc(ref, { ...recurringDocData(input), active: true, createdAt: serverTimestamp() });
   return ref.id;
 }
-export async function confirmRecurring(
+
+export async function updateRecurring(
   uid: string,
-  item: RecurringTransaction,
-  fingerprintValue: string,
-) {
-  const batch = writeBatch(db),
-    occurredAt = asDate(item.nextOccurrence),
-    next = advanceOccurrence(occurredAt, item.frequency, item.interval, item.scheduleAnchorDay);
-  batch.set(doc(path(uid, 'transactions')), {
-    type: item.type,
-    accountId: item.accountId,
-    categoryId: item.categoryId,
-    amountMinor: item.amountMinor,
-    currency: item.currency,
-    description: item.description,
-    tags: [],
-    occurredAt: Timestamp.fromDate(occurredAt),
-    recurringTransactionId: item.id,
-    source: 'recurring',
-    fingerprint: fingerprintValue,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(doc(path(uid, 'accounts'), item.accountId), {
-    currentBalanceMinor: increment(item.type === 'income' ? item.amountMinor : -item.amountMinor),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(doc(path(uid, 'recurringTransactions'), item.id), {
-    nextOccurrence: Timestamp.fromDate(next),
-    active: item.endDate ? next <= asDate(item.endDate) : true,
-    updatedAt: serverTimestamp(),
-  });
-  await batch.commit();
+  id: string,
+  input: RecurringInput,
+): Promise<void> {
+  await updateDoc(doc(recurringCol(uid), id), recurringDocData(input));
 }
-export async function createTransfer(
-  uid: string,
-  input: {
-    sourceAccountId: string;
-    destinationAccountId: string;
-    amountMinor: number;
-    currency: string;
-    description: string;
-    occurredAt: Date;
-    fingerprint: string;
-  },
-) {
-  if (input.sourceAccountId === input.destinationAccountId)
-    throw new Error('Transfer accounts must differ');
-  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
-    throw new Error('Amount must be greater than zero');
-  const sourceRef = doc(path(uid, 'accounts'), input.sourceAccountId),
-    destinationRef = doc(path(uid, 'accounts'), input.destinationAccountId);
-  const accounts = await Promise.all([getDoc(sourceRef), getDoc(destinationRef)]);
-  if (accounts.some((a) => !a.exists() || a.data().archived === true))
-    throw new Error('Select two active accounts');
-  if (accounts.some((account) => account.exists() && account.data().currency !== input.currency))
-    throw new Error('Transfers require accounts in the same currency');
-  const transferId = crypto.randomUUID(),
-    batch = writeBatch(db),
-    common = {
-      type: 'transfer',
-      amountMinor: input.amountMinor,
-      currency: input.currency,
-      description: input.description,
-      tags: [],
-      occurredAt: Timestamp.fromDate(input.occurredAt),
-      transferId,
-      source: 'manual',
-      fingerprint: input.fingerprint,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-  batch.set(doc(path(uid, 'transactions')), {
-    ...common,
-    accountId: input.sourceAccountId,
-    destinationAccountId: input.destinationAccountId,
-    transferRole: 'source',
-  });
-  batch.set(doc(path(uid, 'transactions')), {
-    ...common,
-    accountId: input.destinationAccountId,
-    destinationAccountId: input.sourceAccountId,
-    transferRole: 'destination',
-  });
-  batch.update(sourceRef, {
-    currentBalanceMinor: increment(-input.amountMinor),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(destinationRef, {
-    currentBalanceMinor: increment(input.amountMinor),
-    updatedAt: serverTimestamp(),
-  });
-  await batch.commit();
+
+export async function setRecurringActive(uid: string, id: string, active: boolean): Promise<void> {
+  await updateDoc(doc(recurringCol(uid), id), { active, updatedAt: serverTimestamp() });
 }
-export async function deleteTransaction(
-  uid: string,
-  transaction: Transaction,
-  all: readonly Transaction[],
-) {
-  const batch = writeBatch(db);
-  const related = transaction.transferId
-    ? all.filter((t) => t.transferId === transaction.transferId)
-    : [transaction];
-  for (const item of related) {
-    batch.delete(doc(path(uid, 'transactions'), item.id));
-    batch.update(doc(path(uid, 'accounts'), item.accountId), {
-      currentBalanceMinor: increment(-transactionEffect(item)),
-      updatedAt: serverTimestamp(),
-    });
+
+export async function deleteRecurring(uid: string, id: string): Promise<void> {
+  await deleteDoc(doc(recurringCol(uid), id));
+}
+
+// --- Imports ---
+
+const importDocSchema = z.object({
+  fileName: z.string(),
+  accountId: z.string(),
+  rowCount: z.number().int(),
+  importedCount: z.number().int(),
+  duplicateCount: z.number().int(),
+  createdAt: timestampSchema,
+});
+
+export function parseImportRecord(snap: DocumentSnapshot): ImportRecord {
+  const parsed = importDocSchema.parse(data(snap));
+  return { ...parsed, id: snap.id, createdAt: parsed.createdAt.toDate() };
+}
+
+// --- Settings & first-run seeding ---
+
+export async function loadSettings(uid: string): Promise<Settings> {
+  const snap = await getDoc(settingsDoc(uid));
+  if (!snap.exists()) return defaultSettings;
+  return settingsSchema.parse(snap.data());
+}
+
+export async function saveSettings(uid: string, patch: Partial<Settings>): Promise<void> {
+  await setDoc(settingsDoc(uid), patch, { merge: true });
+}
+
+/**
+ * First-run setup: write default settings and seed default categories.
+ * Seed ids are deterministic, so re-running is idempotent — and a ledger that
+ * already has ANY categories (e.g. from an earlier install) is never seeded,
+ * only marked as seeded, so defaults can't duplicate existing ones.
+ */
+export async function ensureDefaultData(uid: string, settings: Settings): Promise<void> {
+  if (settings.categoriesSeeded) return;
+  const existing = await getDocs(query(categoriesCol(uid), limit(1)));
+  if (!existing.empty) {
+    await saveSettings(uid, { categoriesSeeded: true });
+    return;
   }
-  await batch.commit();
-}
-export async function updateSimpleTransaction(
-  uid: string,
-  original: Transaction,
-  input: TransactionInput,
-) {
-  if (original.type === 'transfer')
-    throw new Error('Edit transfers by deleting and recreating them');
-  await validateTransactionReferences(uid, input);
   const batch = writeBatch(db);
-  batch.update(doc(path(uid, 'accounts'), original.accountId), {
-    currentBalanceMinor: increment(-transactionEffect(original)),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(doc(path(uid, 'accounts'), input.accountId), {
-    currentBalanceMinor: increment(
-      input.type === 'income' ? input.amountMinor : -input.amountMinor,
-    ),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(doc(path(uid, 'transactions'), original.id), {
-    ...input,
-    occurredAt: Timestamp.fromDate(input.occurredAt),
-    updatedAt: serverTimestamp(),
-  });
-  await batch.commit();
-}
-export async function loadAll<T>(uid: string, name: string) {
-  const snapshot = await getDocs(query(path(uid, name), orderBy(documentId())));
-  return snapshot.docs.map((item) => withId<T>(item.data(), item.id));
-}
-export async function loadSettings(uid: string) {
-  const snapshot = await getDoc(doc(db, 'users', uid, 'settings', 'profile'));
-  return snapshot.exists() ? (snapshot.data() as ProfileSettings) : null;
-}
-export async function saveSettings(uid: string, value: ProfileSettings) {
-  await setDoc(doc(db, 'users', uid, 'settings', 'profile'), value);
-}
-export async function writeImportRecord(
-  uid: string,
-  value: Omit<ImportRecord, 'id' | 'createdAt' | 'updatedAt'>,
-) {
-  await addDoc(path(uid, 'imports'), {
-    ...value,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-}
-export async function ensureDefaultCategories(uid: string) {
-  const target = path(uid, 'categories');
-  const existing = await getDocs(query(target, limit(1)));
-  if (!existing.empty) return;
-  const batch = writeBatch(db);
-  const expenses: ReadonlyArray<[string, Category['icon']]> = [
-    ['Housing', 'home'],
-    ['Groceries', 'groceries'],
-    ['Restaurants', 'dining'],
-    ['Transportation', 'transport'],
-    ['Utilities', 'utilities'],
-    ['Health', 'health'],
-    ['Education', 'education'],
-    ['Entertainment', 'entertainment'],
-    ['Subscriptions', 'subscriptions'],
-    ['Personal care', 'personal-care'],
-    ['Gifts', 'gift'],
-    ['Other', DEFAULT_CATEGORY_ICON],
-  ];
-  const incomes: ReadonlyArray<[string, Category['icon']]> = [
-    ['Salary', 'salary'],
-    ['Freelance', 'freelance'],
-    ['Interest', 'interest'],
-    ['Refund', 'refund'],
-    ['Gift', 'gift'],
-    ['Other income', DEFAULT_CATEGORY_ICON],
-  ];
-  for (const [name, icon] of expenses)
-    batch.set(doc(target), {
-      name,
-      type: 'expense',
-      icon,
+  for (const seed of defaultCategorySeeds) {
+    const id = `seed-${seed.type}-${seed.name.toLowerCase().replace(/\s+/g, '-')}`;
+    batch.set(doc(categoriesCol(uid), id), {
+      ...seed,
       archived: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-  for (const [name, icon] of incomes)
-    batch.set(doc(target), {
-      name,
-      type: 'income',
-      icon,
-      archived: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+  }
+  batch.set(settingsDoc(uid), { ...settings, categoriesSeeded: true }, { merge: true });
   await batch.commit();
-}
-export async function importTransactions(
-  uid: string,
-  accountId: string,
-  items: readonly TransactionInput[],
-) {
-  for (let start = 0; start < items.length; start += 399) {
-    const chunk = items.slice(start, start + 399),
-      batch = writeBatch(db);
-    let delta = 0;
-    for (const item of chunk) {
-      batch.set(doc(path(uid, 'transactions')), {
-        ...item,
-        occurredAt: Timestamp.fromDate(item.occurredAt),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      delta += item.type === 'income' ? item.amountMinor : -item.amountMinor;
-    }
-    batch.update(doc(path(uid, 'accounts'), accountId), {
-      currentBalanceMinor: increment(delta),
-      updatedAt: serverTimestamp(),
-    });
-    await batch.commit();
-  }
-}
-export async function restoreBackup(
-  uid: string,
-  data: {
-    settings: Record<string, unknown>;
-    accounts: Record<string, unknown>[];
-    categories: Record<string, unknown>[];
-    transactions: Record<string, unknown>[];
-    budgets: Record<string, unknown>[];
-    recurringTransactions: Record<string, unknown>[];
-  },
-  mode: 'merge' | 'replace',
-) {
-  const groups = [
-    ['accounts', data.accounts],
-    ['categories', data.categories],
-    ['transactions', data.transactions],
-    ['budgets', data.budgets],
-    ['recurringTransactions', data.recurringTransactions],
-  ] as const;
-  if (mode === 'replace') {
-    for (const [name] of groups) {
-      const existing = await getDocs(path(uid, name));
-      for (let i = 0; i < existing.docs.length; i += 400) {
-        const batch = writeBatch(db);
-        existing.docs.slice(i, i + 400).forEach((item) => batch.delete(item.ref));
-        await batch.commit();
-      }
-    }
-  }
-  for (const [name, items] of groups) {
-    for (let i = 0; i < items.length; i += 400) {
-      const batch = writeBatch(db);
-      items.slice(i, i + 400).forEach((item) => {
-        const { id, ...value } = item;
-        const normalized = Object.fromEntries(
-          Object.entries(value).map(([key, v]) => [
-            key,
-            typeof v === 'string' &&
-            /At$|Occurrence$|endDate$/.test(key) &&
-            !Number.isNaN(Date.parse(v))
-              ? Timestamp.fromDate(new Date(v))
-              : v,
-          ]),
-        );
-        batch.set(doc(path(uid, name), String(id)), normalized, { merge: mode === 'merge' });
-      });
-      await batch.commit();
-    }
-  }
-  await setDoc(doc(db, 'users', uid, 'settings', 'profile'), data.settings, {
-    merge: mode === 'merge',
-  });
-}
-export async function applyBalanceCorrections(
-  uid: string,
-  items: readonly { id: string; expected: number }[],
-) {
-  for (let i = 0; i < items.length; i += 400) {
-    const batch = writeBatch(db);
-    items.slice(i, i + 400).forEach((item) =>
-      batch.update(doc(path(uid, 'accounts'), item.id), {
-        currentBalanceMinor: item.expected,
-        updatedAt: serverTimestamp(),
-      }),
-    );
-    await batch.commit();
-  }
 }

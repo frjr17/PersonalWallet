@@ -1,549 +1,569 @@
-import { useEffect, useRef, useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { format } from 'date-fns';
-import { ArrowDown, ArrowLeftRight, ArrowUp, Check, Search, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { toast } from 'sonner';
-import { CategoryIcon } from '@/components/categories/CategoryIcon';
+import { Trash2 } from 'lucide-react';
 import { Page } from '@/components/layout/Page';
-import { Button } from '@/components/ui/Button';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { AmountCalculator } from '@/components/forms/AmountCalculator';
-import { useData } from '@/app/DataProvider';
-import { useAuth } from '@/features/authentication/AuthProvider';
-import { asDate } from '@/lib/dates';
-import { flattenCategories } from '@/lib/categories';
-import { formatMoney, parseMoney } from '@/lib/money';
-import { cn } from '@/lib/utils';
-import { accountBalanceView } from '@/services/finance';
-import { fingerprint } from '@/services/fingerprint';
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
-  createTransaction,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { toDatetimeLocal } from '@/lib/dates';
+import { minorToInputString } from '@/lib/money';
+import { evaluateAmountExpression } from '@/lib/calculator';
+import { OUTSIDE_ACCOUNT } from '@/lib/ledger';
+import { AmountField } from '@/components/forms/AmountField';
+import { CategoryPicker } from '@/features/categories/CategoryPicker';
+import { logError, userMessage } from '@/lib/errors';
+import type { Transaction, TransactionType } from '@/types/domain';
+import { useLedger, useSettings } from '@/app/DataProvider';
+import { getTransaction, getTransferPair } from '@/services/repositories';
+import {
+  createEntry,
   createTransfer,
-  updateSimpleTransaction,
-} from '@/services/repositories';
-import type { Account, Transaction, TransactionType } from '@/types/domain';
+  deleteTransaction,
+  updateEntry,
+  updateTransfer,
+} from '@/services/finance';
 
-interface Form {
-  type: TransactionType;
-  accountId: string;
-  destinationAccountId: string;
-  categoryId: string;
-  amount: string;
-  description: string;
-  merchant: string;
-  occurredAt: string;
-  notes: string;
+const amountField = z
+  .string()
+  .refine(
+    (value) => (evaluateAmountExpression(value) ?? 0) > 0,
+    'Enter an amount greater than zero, like 12.50 or 8+4.50',
+  );
+
+const entryFormSchema = z.object({
+  amount: amountField,
+  accountId: z.string().min(1, 'Pick an account'),
+  categoryId: z.string().optional(),
+  occurredAt: z.string().min(1, 'Pick a date'),
+  description: z.string(),
+  merchant: z.string(),
+  notes: z.string(),
+  tags: z.string(),
+});
+
+const transferFormSchema = z
+  .object({
+    amount: amountField,
+    sourceAccountId: z.string().min(1, 'Pick the source account'),
+    destinationAccountId: z.string().min(1, 'Pick the destination account'),
+    occurredAt: z.string().min(1, 'Pick a date'),
+    description: z.string(),
+    notes: z.string(),
+  })
+  .refine((values) => values.sourceAccountId !== values.destinationAccountId, {
+    message: 'A transfer needs two different accounts',
+    path: ['destinationAccountId'],
+  });
+
+type EntryFormValues = z.infer<typeof entryFormSchema>;
+type TransferFormValues = z.infer<typeof transferFormSchema>;
+
+function splitTags(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
 }
 
-const typeOptions = [
-  { value: 'expense', label: 'Expense', icon: ArrowDown, tone: 'apricot' },
-  { value: 'income', label: 'Income', icon: ArrowUp, tone: 'jade' },
-  { value: 'transfer', label: 'Transfer', icon: ArrowLeftRight, tone: 'ink' },
-] as const;
-
-function formDefaults(source?: Transaction, fallbackAccountId = ''): Form {
-  return {
-    type: source?.type ?? 'expense',
-    accountId: source?.accountId ?? fallbackAccountId,
-    destinationAccountId: source?.destinationAccountId ?? '',
-    categoryId: source?.categoryId ?? '',
-    amount: source ? (source.amountMinor / 100).toFixed(2) : '',
-    description: source?.description ?? '',
-    merchant: source?.merchant ?? '',
-    occurredAt: format(source ? asDate(source.occurredAt) : new Date(), 'yyyy-MM-dd'),
-    notes: source?.notes ?? '',
-  };
-}
-
-function isReadyAmount(value: string) {
-  try {
-    return parseMoney(value) > 0;
-  } catch {
-    return false;
-  }
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p role="alert" className="text-xs text-destructive">
+      {message}
+    </p>
+  );
 }
 
 export function TransactionFormPage() {
   const { transactionId } = useParams();
-  const [params] = useSearchParams();
-  const { transactions, accounts, categories, loading } = useData();
-  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const [categorySearch, setCategorySearch] = useState('');
-  const source = transactions.find(
-    (item) => item.id === (transactionId ?? params.get('duplicate')),
-  );
+  const { uid, monthTransactions } = useLedger();
+
   const editing = Boolean(transactionId);
-  const activeAccounts = accounts.filter((account) => !account.archived);
-  const defaults = formDefaults(source, accounts.find((account) => !account.archived)?.id);
-  const lastResetSourceKey = useRef<string | undefined>(undefined);
-  const {
-    register,
-    setValue,
-    reset,
-    watch,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<Form>({ defaultValues: defaults });
-  const type = watch('type');
-  const amount = watch('amount');
-  const accountId = watch('accountId');
-  const destinationAccountId = watch('destinationAccountId');
-  const categoryId = watch('categoryId');
-  const amountReady = isReadyAmount(amount);
-  const selectedAccount = activeAccounts.find((account) => account.id === accountId);
-  const selectedDestination = activeAccounts.find((account) => account.id === destinationAccountId);
-  const selectedCategory = categoryId
-    ? flattenCategories(categories, { type: type === 'income' ? 'income' : 'expense' }).find(
-        ({ category }) => category.id === categoryId,
-      )
-    : undefined;
-  const amountTone = type === 'income' ? 'bg-jade' : type === 'expense' ? 'bg-apricot' : 'bg-ink';
+  const duplicateFrom = searchParams.get('from');
+  const presetAccount = searchParams.get('account');
+
+  const [type, setType] = useState<TransactionType>(
+    (searchParams.get('type') as TransactionType | null) ?? 'expense',
+  );
+  const [original, setOriginal] = useState<Transaction | null>(null);
+  const [transferLegs, setTransferLegs] = useState<Transaction[] | null>(null);
+  const [loading, setLoading] = useState(editing || Boolean(duplicateFrom));
 
   useEffect(() => {
-    if (!source) return;
-    const sourceKey = `${editing ? 'edit' : 'duplicate'}:${source.id}`;
-    if (lastResetSourceKey.current === sourceKey) return;
-    lastResetSourceKey.current = sourceKey;
-    reset(formDefaults(source));
-  }, [editing, reset, source]);
-  useEffect(() => {
-    if (!accountId && activeAccounts[0])
-      setValue('accountId', activeAccounts[0].id, { shouldValidate: true });
-  }, [accountId, activeAccounts, setValue]);
-  useEffect(() => {
-    if (type === 'transfer' && activeAccounts.length < 2)
-      setValue('type', 'expense', { shouldValidate: true });
-  }, [type, activeAccounts.length, setValue]);
-  useEffect(() => {
-    const selected = categories.find((category) => category.id === categoryId);
-    if (selected && selected.type !== type) setValue('categoryId', '');
-  }, [type, categoryId, categories, setValue]);
-
-  if (editing && loading) {
-    return (
-      <Page eyebrow="Edit entry" title="Loading transaction">
-        <div className="border-y py-8">
-          <p className="animate-pulse opacity-60">Opening the ledger entry…</p>
-        </div>
-      </Page>
-    );
-  }
-
-  if (editing && (!source || source.type === 'transfer')) {
-    return (
-      <Page eyebrow="Edit entry" title="Transaction unavailable">
-        <EmptyState
-          title={source?.type === 'transfer' ? 'Linked transfer' : 'Transaction not found'}
-          detail={
-            source?.type === 'transfer'
-              ? 'Delete this linked transfer and create it again to change its accounts or amount.'
-              : 'This entry is not available in the selected month. Return to transactions and choose an entry there.'
-          }
-        />
-      </Page>
-    );
-  }
-
-  const categoryChoices = flattenCategories(categories, {
-    type: type === 'income' ? 'income' : 'expense',
-  }).filter(({ path }) => path.toLowerCase().includes(categorySearch.trim().toLowerCase()));
-
-  const submit = handleSubmit(async (value) => {
-    if (!user) return;
-    try {
-      const amountMinor = parseMoney(value.amount);
-      const occurredAt = new Date(`${value.occurredAt}T12:00:00`);
-      const hash = await fingerprint(value.accountId, occurredAt, amountMinor, value.description);
-      if (value.type === 'transfer') {
-        if (editing) throw new Error('Create transfers from a new entry');
-        await createTransfer(user.uid, {
-          sourceAccountId: value.accountId,
-          destinationAccountId: value.destinationAccountId,
-          amountMinor,
-          currency: 'USD',
-          description: value.description.trim(),
-          occurredAt,
-          fingerprint: hash,
-        });
-      } else {
-        const input = {
-          type: value.type,
-          accountId: value.accountId,
-          categoryId: value.categoryId,
-          amountMinor,
-          currency: 'USD',
-          description: value.description.trim(),
-          merchant: value.merchant.trim() || undefined,
-          notes: value.notes.trim() || undefined,
-          tags: [],
-          occurredAt,
-          source: 'manual' as const,
-          fingerprint: hash,
-        };
-        if (editing && source) await updateSimpleTransaction(user.uid, source, input);
-        else await createTransaction(user.uid, input);
+    const sourceId = transactionId ?? duplicateFrom;
+    if (!sourceId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = monthTransactions.find((txn) => txn.id === sourceId);
+        const txn = cached ?? (await getTransaction(uid, sourceId));
+        if (cancelled) return;
+        setType(txn.type);
+        if (txn.type === 'transfer' && txn.transferId) {
+          const legs = await getTransferPair(uid, txn.transferId);
+          if (!cancelled) setTransferLegs(legs);
+        }
+        setOriginal(txn);
+      } catch (error) {
+        logError('transactions', error);
+        toast.error(userMessage(error));
+        navigate('/transactions', { replace: true });
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      toast.success(editing ? 'Transaction updated' : 'Transaction saved');
-      void navigate('/transactions');
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // monthTransactions intentionally omitted: this loads once per target id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, transactionId, duplicateFrom]);
+
+  async function handleDelete() {
+    if (!original) return;
+    try {
+      await deleteTransaction(uid, original);
+      toast.success(original.type === 'transfer' ? 'Transfer deleted' : 'Transaction deleted');
+      navigate('/transactions');
     } catch (error) {
-      console.error(
-        'Transaction save failed',
-        error instanceof Error ? error.message : 'Unknown error',
-      );
-      toast.error(error instanceof Error ? error.message : 'Could not save transaction');
+      logError('transactions', error);
+      toast.error(userMessage(error, 'The transaction was not deleted. Try again.'));
     }
-  });
+  }
+
+  const title = editing
+    ? type === 'transfer'
+      ? 'Edit transfer'
+      : 'Edit transaction'
+    : 'New transaction';
 
   return (
     <Page
-      eyebrow={editing ? 'Edit entry' : 'New entry'}
-      title={
-        type === 'transfer' ? 'Move money' : type === 'income' ? 'Record income' : 'Record expense'
-      }
-      action={
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            aria-label="Cancel"
-            onClick={() => navigate(-1)}
+      title={title}
+      description={editing ? undefined : 'Record money in, money out, or a move between accounts.'}
+      actions={
+        editing && original ? (
+          <ConfirmDialog
+            title={type === 'transfer' ? 'Delete this transfer?' : 'Delete this transaction?'}
+            description={
+              type === 'transfer'
+                ? 'Both sides of the transfer are removed and both account balances are restored.'
+                : 'The transaction is removed and the account balance is restored.'
+            }
+            confirmLabel="Delete"
+            onConfirm={() => void handleDelete()}
           >
-            <X size={18} />
-          </Button>
-          <Button
-            form="transaction-form"
-            disabled={isSubmitting || !amountReady}
-            aria-label="Save entry"
-          >
-            <Check size={18} />
-          </Button>
-        </div>
+            <Button variant="outline">
+              <Trash2 /> Delete
+            </Button>
+          </ConfirmDialog>
+        ) : undefined
       }
+      className="max-w-xl"
     >
-      <form
-        id="transaction-form"
-        onSubmit={submit}
-        className="grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,1fr)_23rem]"
-      >
-        <div className="space-y-6">
-          <section
-            className={cn('overflow-hidden rounded-[2rem] text-white shadow-lg', amountTone)}
-          >
-            <fieldset>
-              <legend className="sr-only">Entry type</legend>
-              <div className="grid grid-cols-3 bg-black/10">
-                {typeOptions.map(({ value, label }) => {
-                  const disabled = value === 'transfer' && (activeAccounts.length < 2 || editing);
-                  return (
-                    <button
-                      type="button"
-                      key={value}
-                      disabled={disabled}
-                      aria-pressed={type === value}
-                      className={cn(
-                        'min-h-16 border-x border-black/10 px-2 text-sm font-bold uppercase tracking-wide transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-base',
-                        type === value ? 'bg-white/12 shadow-inner' : 'hover:bg-white/10',
-                      )}
-                      onClick={() => {
-                        setValue('type', value, { shouldDirty: true, shouldValidate: true });
-                        setCategorySearch('');
-                      }}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-              <input type="hidden" {...register('type')} />
-            </fieldset>
-            <div className="px-6 py-10 sm:px-10">
-              <div className="flex items-end justify-between gap-4">
-                <span className="text-5xl font-light">
-                  {type === 'income' ? '+' : type === 'expense' ? '−' : ''}
-                </span>
-                <div className="min-w-0 text-right">
-                  <p className="amount truncate text-7xl font-light leading-none sm:text-8xl">
-                    {amount || '0'}
-                  </p>
-                  <p className="mt-2 text-3xl font-light opacity-80">
-                    {selectedAccount?.currency ?? 'USD'}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-12 grid gap-4 text-center sm:grid-cols-2">
-                <div>
-                  <p className="text-sm opacity-55">
-                    {type === 'transfer' ? 'From account' : 'Account'}
-                  </p>
-                  <p className="truncate text-xl font-semibold uppercase">
-                    {selectedAccount?.name ?? 'Choose account'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm opacity-55">
-                    {type === 'transfer' ? 'To account' : 'Category'}
-                  </p>
-                  <p className="truncate text-xl font-semibold uppercase">
-                    {type === 'transfer'
-                      ? (selectedDestination?.name ?? 'Choose destination')
-                      : (selectedCategory?.path ?? 'Choose category')}
-                  </p>
-                </div>
-              </div>
-              {editing ? (
-                <p className="mt-6 text-sm opacity-75">
-                  Transfers are linked entries and can only be created from a new entry.
-                </p>
-              ) : activeAccounts.length < 2 ? (
-                <p className="mt-6 text-sm opacity-75">
-                  Add a second active account to enable transfers.
-                </p>
-              ) : null}
-            </div>
-          </section>
-
-          <section className="card">
-            <FieldLabel>{type === 'transfer' ? 'From account' : 'Account'}</FieldLabel>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {activeAccounts.map((account) => (
-                <AccountChoice
-                  key={account.id}
-                  account={account}
-                  context={type === 'transfer' ? 'From account' : 'Account'}
-                  selected={accountId === account.id}
-                  onClick={() => {
-                    setValue('accountId', account.id, { shouldDirty: true, shouldValidate: true });
-                    if (destinationAccountId === account.id)
-                      setValue('destinationAccountId', '', { shouldValidate: true });
-                  }}
-                />
-              ))}
-            </div>
-            <input type="hidden" {...register('accountId', { required: 'Choose an account' })} />
-            {errors.accountId && <FormError>{errors.accountId.message}</FormError>}
-
-            {type === 'transfer' && (
-              <div className="mt-6 border-t pt-5">
-                <FieldLabel>To account</FieldLabel>
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {activeAccounts.map((account) => (
-                    <AccountChoice
-                      key={account.id}
-                      account={account}
-                      context="To account"
-                      selected={destinationAccountId === account.id}
-                      disabled={account.id === accountId}
-                      onClick={() =>
-                        setValue('destinationAccountId', account.id, {
-                          shouldDirty: true,
-                          shouldValidate: true,
-                        })
-                      }
-                    />
-                  ))}
-                </div>
-                <input
-                  type="hidden"
-                  {...register('destinationAccountId', {
-                    required: 'Choose a destination account',
-                  })}
-                />
-                {errors.destinationAccountId && (
-                  <FormError>{errors.destinationAccountId.message}</FormError>
-                )}
-              </div>
-            )}
-          </section>
-
-          {type !== 'transfer' && (
-            <section className="card">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <FieldLabel>Category</FieldLabel>
-                  <p className="text-sm opacity-55">Subcategories keep their full path visible.</p>
-                </div>
-                <label className="relative sm:w-64">
-                  <span className="sr-only">Search categories</span>
-                  <Search
-                    className="absolute left-3 top-3 text-ink/40 dark:text-white/40"
-                    size={18}
-                  />
-                  <input
-                    className="input pl-9"
-                    value={categorySearch}
-                    onChange={(event) => setCategorySearch(event.target.value)}
-                    placeholder="Find a category"
-                  />
-                </label>
-              </div>
-              <div className="mt-4 grid max-h-72 gap-x-5 overflow-y-auto border-y pr-1 sm:grid-cols-2">
-                {categoryChoices.map(({ category, depth, path }) => (
-                  <button
-                    type="button"
-                    key={category.id}
-                    aria-pressed={categoryId === category.id}
-                    className={`flex min-h-14 items-center gap-3 border-b px-2 py-2 text-left transition-colors ${
-                      categoryId === category.id
-                        ? 'bg-mist/80 text-ink dark:bg-jade/25 dark:text-white'
-                        : 'hover:bg-ink/[.035] dark:hover:bg-white/[.055]'
-                    }`}
-                    onClick={() =>
-                      setValue('categoryId', category.id, {
-                        shouldDirty: true,
-                        shouldValidate: true,
-                      })
-                    }
-                  >
-                    <span
-                      className="grid size-8 shrink-0 place-items-center text-jade dark:text-[#67c7b5]"
-                      style={{ marginLeft: `${depth * 0.45}rem` }}
-                    >
-                      <CategoryIcon icon={category.icon} size={17} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block font-semibold">{category.name}</span>
-                      {depth > 0 && (
-                        <span className="mt-0.5 block truncate text-xs opacity-60">{path}</span>
-                      )}
-                    </span>
-                  </button>
-                ))}
-                {!categoryChoices.length && (
-                  <p className="py-6 text-sm opacity-60">No matching active categories.</p>
-                )}
-              </div>
-              <input type="hidden" {...register('categoryId', { required: 'Choose a category' })} />
-              {errors.categoryId && <FormError>{errors.categoryId.message}</FormError>}
-            </section>
+      {loading ? (
+        <div className="grid gap-4">
+          {Array.from({ length: 5 }, (_, index) => (
+            <Skeleton key={index} className="h-12" />
+          ))}
+        </div>
+      ) : (
+        <>
+          {!editing && (
+            <Tabs
+              value={type}
+              onValueChange={(value) => setType(value as TransactionType)}
+              className="mb-5"
+            >
+              <TabsList aria-label="Transaction type" className="w-full">
+                <TabsTrigger value="expense">Expense</TabsTrigger>
+                <TabsTrigger value="income">Income</TabsTrigger>
+                <TabsTrigger value="transfer">Transfer</TabsTrigger>
+              </TabsList>
+            </Tabs>
           )}
-
-          <section className="card">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="sm:col-span-2">
-                <FieldLabel>Description</FieldLabel>
-                <input
-                  className="input"
-                  autoComplete="off"
-                  {...register('description', { required: 'Add a description' })}
-                  aria-invalid={Boolean(errors.description)}
-                />
-                {errors.description && <FormError>{errors.description.message}</FormError>}
-              </label>
-              <label>
-                <FieldLabel>Date</FieldLabel>
-                <input
-                  className="input"
-                  type="date"
-                  {...register('occurredAt', { required: true })}
-                />
-              </label>
-              {type !== 'transfer' && (
-                <label>
-                  <FieldLabel>
-                    Merchant <span className="font-normal opacity-50">optional</span>
-                  </FieldLabel>
-                  <input className="input" {...register('merchant')} />
-                </label>
-              )}
-              <label className="sm:col-span-2">
-                <FieldLabel>
-                  Notes <span className="font-normal opacity-50">optional</span>
-                </FieldLabel>
-                <textarea className="input min-h-24 py-3" {...register('notes')} />
-              </label>
-            </div>
-          </section>
-        </div>
-
-        <div className="lg:sticky lg:top-6 lg:self-start">
-          <aside className="rounded-[2rem] bg-[#141615] p-4 text-white shadow-lg dark:bg-white/[.06]">
-            <div className="mb-4">
-              <FieldLabel>Amount</FieldLabel>
-              <p className="text-sm opacity-55">Calculate here, then save the final result.</p>
-            </div>
-            <AmountCalculator
-              value={amount}
-              onChange={(next) =>
-                setValue('amount', next, { shouldDirty: true, shouldValidate: true })
-              }
+          {type === 'transfer' ? (
+            <TransferForm original={original} legs={transferLegs} />
+          ) : (
+            <EntryForm
+              type={type}
+              original={original}
+              duplicating={Boolean(duplicateFrom)}
+              presetAccount={presetAccount}
             />
-            <input type="hidden" {...register('amount', { required: 'Enter an amount' })} />
-            {errors.amount && <FormError>{errors.amount.message}</FormError>}
-            {!amountReady && (
-              <p className="mt-2 text-sm opacity-60">Enter an amount or press = to finish.</p>
-            )}
-            <div className="mt-5 grid gap-2">
-              <Button disabled={isSubmitting || !amountReady} className="w-full">
-                {isSubmitting ? 'Saving…' : editing ? 'Update entry' : 'Save entry'}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full"
-                onClick={() => navigate(-1)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </aside>
-        </div>
-      </form>
+          )}
+        </>
+      )}
     </Page>
   );
 }
 
-function AccountChoice({
-  account,
-  context,
-  selected,
-  disabled,
-  onClick,
+function EntryForm({
+  type,
+  original,
+  duplicating,
+  presetAccount,
 }: {
-  account: Account;
-  context: string;
-  selected: boolean;
-  disabled?: boolean;
-  onClick: () => void;
+  type: 'income' | 'expense';
+  original: Transaction | null;
+  duplicating: boolean;
+  presetAccount: string | null;
 }) {
-  const view = accountBalanceView(account);
+  const navigate = useNavigate();
+  const ledger = useLedger();
+  const { settings } = useSettings();
+  const { activeAccounts, categories } = ledger;
+  const editing = Boolean(original) && !duplicating;
+
+  const availableCategories = useMemo(
+    () =>
+      categories.filter(
+        (category) =>
+          category.type === type && (!category.archived || category.id === original?.categoryId),
+      ),
+    [categories, type, original],
+  );
+
+  // defaultValues (not reactive `values`): this form mounts only after `original`
+  // has loaded, and a reactive clock-based value would reset user input mid-typing.
+  const form = useForm<EntryFormValues>({
+    resolver: zodResolver(entryFormSchema),
+    defaultValues: {
+      amount: original ? minorToInputString(original.amountMinor) : '',
+      accountId: original?.accountId ?? presetAccount ?? activeAccounts[0]?.id ?? '',
+      categoryId: original?.categoryId,
+      occurredAt: toDatetimeLocal(duplicating || !original ? new Date() : original.occurredAt),
+      description: original?.description ?? '',
+      merchant: original?.merchant ?? '',
+      notes: original?.notes ?? '',
+      tags: original?.tags.join(', ') ?? '',
+    },
+  });
+
+  // Income and expense use different category sets; drop a stale selection on switch.
+  const selectedCategoryId = form.watch('categoryId');
+  useEffect(() => {
+    if (selectedCategoryId && !availableCategories.some((c) => c.id === selectedCategoryId)) {
+      form.setValue('categoryId', undefined);
+    }
+  }, [selectedCategoryId, availableCategories, form]);
+
+  async function onSubmit(values: EntryFormValues) {
+    const input = {
+      type,
+      accountId: values.accountId,
+      categoryId: values.categoryId || undefined,
+      amountMinor: evaluateAmountExpression(values.amount)!,
+      currency: settings.currency,
+      merchant: values.merchant.trim() || undefined,
+      description: values.description.trim(),
+      notes: values.notes.trim() || undefined,
+      tags: splitTags(values.tags),
+      occurredAt: new Date(values.occurredAt),
+    };
+    try {
+      if (editing && original) {
+        await updateEntry(ledger, original, input);
+        toast.success('Transaction updated');
+      } else {
+        await createEntry(ledger, input);
+        toast.success(type === 'income' ? 'Income recorded' : 'Expense recorded');
+      }
+      navigate(-1);
+    } catch (error) {
+      logError('transactions', error);
+      toast.error(userMessage(error, 'The transaction was not saved. Try again.'));
+    }
+  }
+
+  const { errors, isSubmitting } = form.formState;
+
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-label={`${context}: ${account.name}`}
-      aria-pressed={selected}
-      className={`min-h-16 rounded-xl px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
-        selected
-          ? 'bg-mist text-ink ring-2 ring-jade/40 dark:bg-jade/25 dark:text-white'
-          : 'hover:bg-ink/[.035] dark:hover:bg-white/[.055]'
-      }`}
-      onClick={onClick}
-    >
-      <span className="flex items-center justify-between gap-2">
-        <span className="font-semibold">{account.name}</span>
-        <span className="text-xs opacity-55">
-          {account.type === 'credit-card' ? 'credit' : account.type}
-        </span>
-      </span>
-      <span className="amount mt-1 block text-sm opacity-70">
-        {account.type === 'credit-card'
-          ? `${view.label}: ${formatMoney(view.primaryMinor)}`
-          : formatMoney(view.primaryMinor)}
-      </span>
-    </button>
+    <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4" noValidate>
+      <div className="grid gap-1.5">
+        <Label htmlFor="entry-amount">Amount</Label>
+        <AmountField
+          id="entry-amount"
+          value={form.watch('amount')}
+          onChange={(value) => form.setValue('amount', value, { shouldValidate: false })}
+          invalid={Boolean(errors.amount)}
+        />
+        <FieldError message={errors.amount?.message} />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-1.5">
+          <Label htmlFor="entry-account">Account</Label>
+          <Select
+            value={form.watch('accountId')}
+            onValueChange={(value) => form.setValue('accountId', value)}
+          >
+            <SelectTrigger id="entry-account" aria-invalid={Boolean(errors.accountId)}>
+              <SelectValue placeholder="Pick an account" />
+            </SelectTrigger>
+            <SelectContent>
+              {activeAccounts.map((account) => (
+                <SelectItem key={account.id} value={account.id}>
+                  {account.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FieldError message={errors.accountId?.message} />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="entry-category">Category</Label>
+          <CategoryPicker
+            id="entry-category"
+            type={type}
+            value={form.watch('categoryId')}
+            onChange={(categoryId) => form.setValue('categoryId', categoryId)}
+            includeCategoryId={original?.categoryId}
+          />
+        </div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-1.5">
+          <Label htmlFor="entry-date">Date</Label>
+          <Input
+            id="entry-date"
+            type="datetime-local"
+            aria-invalid={Boolean(errors.occurredAt)}
+            {...form.register('occurredAt')}
+          />
+          <FieldError message={errors.occurredAt?.message} />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="entry-merchant">
+            {type === 'income' ? 'Payer (optional)' : 'Merchant (optional)'}
+          </Label>
+          <Input id="entry-merchant" autoComplete="off" {...form.register('merchant')} />
+        </div>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="entry-description">Description (optional)</Label>
+        <Input
+          id="entry-description"
+          autoComplete="off"
+          placeholder={type === 'income' ? 'July paycheck' : 'Weekly groceries'}
+          {...form.register('description')}
+        />
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="entry-tags">Tags (optional)</Label>
+        <Input
+          id="entry-tags"
+          autoComplete="off"
+          placeholder="vacation, shared"
+          aria-describedby="entry-tags-hint"
+          {...form.register('tags')}
+        />
+        <p id="entry-tags-hint" className="text-xs text-muted-foreground">
+          Separate tags with commas.
+        </p>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="entry-notes">Notes (optional)</Label>
+        <Textarea id="entry-notes" rows={2} {...form.register('notes')} />
+      </div>
+      {/* Always reachable: sticks above the mobile bottom nav, at the viewport bottom on desktop. */}
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex gap-2 border-t bg-background pt-3 pb-2 md:bottom-0">
+        <Button type="submit" disabled={isSubmitting} className="flex-1">
+          {editing ? 'Save changes' : type === 'income' ? 'Record income' : 'Record expense'}
+        </Button>
+        <Button type="button" variant="outline" onClick={() => navigate(-1)}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <span className="label">{children}</span>;
-}
+function TransferForm({
+  original,
+  legs,
+}: {
+  original: Transaction | null;
+  legs: Transaction[] | null;
+}) {
+  const navigate = useNavigate();
+  const ledger = useLedger();
+  const { settings } = useSettings();
+  const { accounts, activeAccounts } = ledger;
+  const editing = Boolean(original);
 
-function FormError({ children }: { children: React.ReactNode }) {
+  // Reconstruct both ends from the stored legs. A single leg means the other
+  // end is outside the wallet (or belonged to a deleted account — same thing now).
+  const outgoingLeg = legs?.find((leg) => leg.destinationAccountId);
+  const incomingLeg = legs?.find((leg) => !leg.destinationAccountId);
+  const anyLeg = outgoingLeg ?? incomingLeg;
+  const knownAccount = (id?: string) =>
+    id && accounts.some((account) => account.id === id) ? id : OUTSIDE_ACCOUNT;
+  const initialSource = legs?.length
+    ? outgoingLeg
+      ? outgoingLeg.accountId
+      : OUTSIDE_ACCOUNT
+    : (activeAccounts[0]?.id ?? '');
+  const initialDestination = legs?.length
+    ? incomingLeg
+      ? incomingLeg.accountId
+      : knownAccount(outgoingLeg?.destinationAccountId)
+    : '';
+
+  const form = useForm<TransferFormValues>({
+    resolver: zodResolver(transferFormSchema),
+    defaultValues: {
+      amount: anyLeg ? minorToInputString(anyLeg.amountMinor) : '',
+      sourceAccountId: initialSource,
+      destinationAccountId: initialDestination,
+      occurredAt: toDatetimeLocal(anyLeg ? anyLeg.occurredAt : new Date()),
+      description: anyLeg?.description.startsWith('Transfer ') ? '' : (anyLeg?.description ?? ''),
+      notes: anyLeg?.notes ?? '',
+    },
+  });
+
+  async function onSubmit(values: TransferFormValues) {
+    const input = {
+      sourceAccountId: values.sourceAccountId,
+      destinationAccountId: values.destinationAccountId,
+      amountMinor: evaluateAmountExpression(values.amount)!,
+      currency: settings.currency,
+      description: values.description.trim() || undefined,
+      notes: values.notes.trim() || undefined,
+      occurredAt: new Date(values.occurredAt),
+    };
+    try {
+      if (editing && legs) {
+        await updateTransfer(ledger, legs, input);
+        toast.success('Transfer updated');
+      } else {
+        await createTransfer(ledger, input);
+        toast.success('Transfer recorded');
+      }
+      navigate(-1);
+    } catch (error) {
+      logError('transactions', error);
+      toast.error(userMessage(error, 'The transfer was not saved. Try again.'));
+    }
+  }
+
+  const { errors, isSubmitting } = form.formState;
+
   return (
-    <span role="alert" className="mt-1 block text-sm font-semibold text-apricot">
-      {children}
-    </span>
+    <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4" noValidate>
+      <div className="grid gap-1.5">
+        <Label htmlFor="transfer-amount">Amount</Label>
+        <AmountField
+          id="transfer-amount"
+          value={form.watch('amount')}
+          onChange={(value) => form.setValue('amount', value, { shouldValidate: false })}
+          invalid={Boolean(errors.amount)}
+        />
+        <FieldError message={errors.amount?.message} />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-1.5">
+          <Label htmlFor="transfer-source">From account</Label>
+          <Select
+            value={form.watch('sourceAccountId')}
+            onValueChange={(value) => form.setValue('sourceAccountId', value)}
+          >
+            <SelectTrigger id="transfer-source" aria-invalid={Boolean(errors.sourceAccountId)}>
+              <SelectValue placeholder="Source" />
+            </SelectTrigger>
+            <SelectContent>
+              {form.watch('destinationAccountId') !== OUTSIDE_ACCOUNT && (
+                <SelectItem value={OUTSIDE_ACCOUNT}>Outside of wallet</SelectItem>
+              )}
+              {activeAccounts.map((account) => (
+                <SelectItem key={account.id} value={account.id}>
+                  {account.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FieldError message={errors.sourceAccountId?.message} />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="transfer-destination">To account</Label>
+          <Select
+            value={form.watch('destinationAccountId')}
+            onValueChange={(value) => form.setValue('destinationAccountId', value)}
+          >
+            <SelectTrigger
+              id="transfer-destination"
+              aria-invalid={Boolean(errors.destinationAccountId)}
+            >
+              <SelectValue placeholder="Destination" />
+            </SelectTrigger>
+            <SelectContent>
+              {form.watch('sourceAccountId') !== OUTSIDE_ACCOUNT && (
+                <SelectItem value={OUTSIDE_ACCOUNT}>Outside of wallet</SelectItem>
+              )}
+              {activeAccounts
+                .filter((account) => account.id !== form.watch('sourceAccountId'))
+                .map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {account.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          <FieldError message={errors.destinationAccountId?.message} />
+        </div>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="transfer-date">Date</Label>
+        <Input
+          id="transfer-date"
+          type="datetime-local"
+          aria-invalid={Boolean(errors.occurredAt)}
+          {...form.register('occurredAt')}
+        />
+        <FieldError message={errors.occurredAt?.message} />
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="transfer-description">Description (optional)</Label>
+        <Input
+          id="transfer-description"
+          autoComplete="off"
+          placeholder="Monthly savings"
+          aria-describedby="transfer-description-hint"
+          {...form.register('description')}
+        />
+        <p id="transfer-description-hint" className="text-xs text-muted-foreground">
+          Left empty, it becomes “Transfer to …” and “Transfer from …”.
+        </p>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="transfer-notes">Notes (optional)</Label>
+        <Textarea id="transfer-notes" rows={2} {...form.register('notes')} />
+      </div>
+      {/* Always reachable: sticks above the mobile bottom nav, at the viewport bottom on desktop. */}
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex gap-2 border-t bg-background pt-3 pb-2 md:bottom-0">
+        <Button type="submit" disabled={isSubmitting} className="flex-1">
+          {editing ? 'Save changes' : 'Record transfer'}
+        </Button>
+        <Button type="button" variant="outline" onClick={() => navigate(-1)}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

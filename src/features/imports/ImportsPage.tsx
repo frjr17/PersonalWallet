@@ -1,211 +1,453 @@
-import { useState } from 'react';
-import { CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { limit, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { format } from 'date-fns';
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FileUp, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { Page } from '@/components/layout/Page';
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { useData } from '@/app/DataProvider';
-import { useAuth } from '@/features/authentication/AuthProvider';
-import { normalizeRows, parseCsv, type CsvMapping, type NormalizedRow } from '@/services/csv';
-import { fingerprint } from '@/services/fingerprint';
-import { importTransactions, loadAll, writeImportRecord } from '@/services/repositories';
-import type { Transaction } from '@/types/domain';
-import { formatMoney } from '@/lib/money';
+import { Money } from '@/components/money';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { logError, userMessage } from '@/lib/errors';
+import type { ImportRecord } from '@/types/domain';
+import { useLedger, useSettings } from '@/app/DataProvider';
+import { getDocs } from 'firebase/firestore';
+import {
+  importsCol,
+  parseImportRecord,
+  parseTransaction,
+  transactionsInRange,
+} from '@/services/repositories';
+import { importEntries, type EntryInput } from '@/services/finance';
+import {
+  csvDateFormats,
+  emptyMapping,
+  guessMapping,
+  markDuplicates,
+  normalizeCsvRow,
+  parseCsvFile,
+  type CsvDateFormat,
+  type CsvMapping,
+  type NormalizedCsvRow,
+  type ParsedCsv,
+} from '@/services/csv';
+
+type Step = 'pick' | 'map' | 'preview' | 'done';
+
+const mappingFields: { key: keyof CsvMapping; label: string; hint?: string }[] = [
+  { key: 'date', label: 'Date' },
+  { key: 'description', label: 'Description' },
+  { key: 'amount', label: 'Amount (signed)', hint: 'Positive = income, negative = expense' },
+  { key: 'debit', label: 'Debit', hint: 'Used when there is no signed amount column' },
+  { key: 'credit', label: 'Credit' },
+  { key: 'category', label: 'Category', hint: 'Matched to your categories by name' },
+  { key: 'merchant', label: 'Merchant' },
+];
+
 export function ImportsPage() {
-  const { accounts, categories } = useData(),
-    { user } = useAuth(),
-    [fileName, setFileName] = useState(''),
-    [fields, setFields] = useState<string[]>([]),
-    [raw, setRaw] = useState<Record<string, string>[]>([]),
-    [accountId, setAccountId] = useState(''),
-    [mapping, setMapping] = useState<CsvMapping>({ date: '', description: '', amount: '' }),
-    [dateFormat, setDateFormat] = useState('MM/dd/yyyy'),
-    [rows, setRows] = useState<NormalizedRow[]>([]);
-  const choose = async (file?: File) => {
-    if (!file) return;
-    const parsed = parseCsv(await file.text());
-    setFileName(file.name);
-    setFields(parsed.fields);
-    setRaw(parsed.rows);
-    setMapping({
-      date: parsed.fields.find((f) => /date/i.test(f)) ?? '',
-      description: parsed.fields.find((f) => /description|memo/i.test(f)) ?? '',
-      amount: parsed.fields.find((f) => /amount/i.test(f)) ?? '',
-    });
-  };
-  const preview = async () => {
-    if (!accountId) return toast.error('Choose a destination account');
-    const normalized = normalizeRows(raw, mapping, dateFormat);
-    const existing = user ? await loadAll<Transaction>(user.uid, 'transactions') : [];
-    for (const row of normalized.filter((r) => r.valid)) {
-      row.fingerprint = await fingerprint(
-        accountId,
-        row.occurredAt,
-        row.amountMinor,
-        row.description,
-      );
-      row.duplicate = existing.some((t) => t.fingerprint === row.fingerprint);
+  const ledger = useLedger();
+  const { uid, activeAccounts, categories } = ledger;
+  const { settings } = useSettings();
+
+  const [step, setStep] = useState<Step>('pick');
+  const [fileName, setFileName] = useState('');
+  const [parsed, setParsed] = useState<ParsedCsv | null>(null);
+  const [mapping, setMapping] = useState<CsvMapping>(emptyMapping);
+  const [dateFormat, setDateFormat] = useState<CsvDateFormat>('yyyy-MM-dd');
+  const [accountId, setAccountId] = useState('');
+  const [rows, setRows] = useState<NormalizedCsvRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [importedCount, setImportedCount] = useState(0);
+  const [history, setHistory] = useState<ImportRecord[]>([]);
+
+  useEffect(() => {
+    return onSnapshot(
+      query(importsCol(uid), orderBy('createdAt', 'desc'), limit(10)),
+      (snap) => setHistory(snap.docs.map(parseImportRecord)),
+      (error) => logError('imports', error),
+    );
+  }, [uid]);
+
+  async function handleFile(file: File) {
+    try {
+      const result = await parseCsvFile(file);
+      if (result.rows.length === 0) {
+        toast.error('That file has no data rows.');
+        return;
+      }
+      setFileName(file.name);
+      setParsed(result);
+      setMapping(guessMapping(result.headers));
+      setAccountId(activeAccounts[0]?.id ?? '');
+      setStep('map');
+    } catch (error) {
+      logError('imports', error);
+      toast.error('That file could not be read as CSV.');
     }
-    setRows(normalized);
-  };
-  const runImport = async () => {
-    if (!user) return;
-    const category = (type: 'income' | 'expense', name?: string) =>
-      categories.find((c) => c.type === type && name && c.name.toLowerCase() === name.toLowerCase())
-        ?.id ?? categories.find((c) => c.type === type)?.id;
-    const selected = rows.filter((r) => r.valid && r.included && !r.duplicate);
-    const items = selected.flatMap((r) => {
-      const categoryId = category(r.type, r.categoryName);
-      return categoryId
-        ? [
-            {
-              type: r.type,
-              accountId,
-              categoryId,
-              amountMinor: r.amountMinor,
-              currency: 'USD',
-              description: r.description,
-              merchant: r.merchant,
-              tags: [],
-              occurredAt: r.occurredAt,
-              source: 'csv-import' as const,
-              fingerprint: r.fingerprint ?? '',
-            },
-          ]
-        : [];
-    });
-    await importTransactions(user.uid, accountId, items);
-    await writeImportRecord(user.uid, {
-      fileName,
-      accountId,
-      imported: items.length,
-      skipped: rows.length - items.length,
-      duplicates: rows.filter((r) => r.duplicate).length,
-    });
-    toast.success(`${items.length} transactions imported`);
+  }
+
+  const mappingValid =
+    mapping.date !== '' && (mapping.amount !== '' || mapping.debit !== '' || mapping.credit !== '');
+
+  async function buildPreview() {
+    if (!parsed || !accountId) return;
+    setBusy(true);
+    try {
+      const normalized = parsed.rows.map((raw, index) =>
+        normalizeCsvRow(raw, index, mapping, dateFormat, categories),
+      );
+      const valid = normalized.filter((row) => !row.error && row.occurredAt);
+      const dates = valid.map((row) => row.occurredAt!.getTime());
+      let existing: Awaited<ReturnType<typeof markDuplicates>> = normalized;
+      if (dates.length > 0) {
+        const start = new Date(Math.min(...dates));
+        const end = new Date(Math.max(...dates) + 24 * 60 * 60 * 1000);
+        const snap = await getDocs(transactionsInRange(uid, start, end));
+        const existingTxns = snap.docs
+          .map(parseTransaction)
+          .filter((txn) => txn.accountId === accountId);
+        existing = await markDuplicates(normalized, accountId, existingTxns);
+      }
+      setRows(existing);
+      setStep('preview');
+    } catch (error) {
+      logError('imports', error);
+      toast.error(userMessage(error, 'The preview failed. Check the column mapping.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const included = useMemo(() => rows.filter((row) => row.included && !row.error), [rows]);
+  const failed = useMemo(() => rows.filter((row) => row.error), [rows]);
+  const duplicates = useMemo(() => rows.filter((row) => row.duplicate), [rows]);
+
+  function toggleRow(index: number, value: boolean) {
+    setRows((current) =>
+      current.map((row) => (row.index === index ? { ...row, included: value } : row)),
+    );
+  }
+
+  async function runImport() {
+    if (included.length === 0) return;
+    setBusy(true);
+    try {
+      const entries: EntryInput[] = included.map((row) => ({
+        type: row.type!,
+        accountId,
+        categoryId: row.categoryId,
+        amountMinor: row.amountMinor!,
+        currency: settings.currency,
+        merchant: row.merchant,
+        description: row.description,
+        tags: [],
+        occurredAt: row.occurredAt!,
+      }));
+      await importEntries(ledger, entries, {
+        fileName,
+        accountId,
+        rowCount: rows.length,
+        duplicateCount: duplicates.length,
+      });
+      setImportedCount(entries.length);
+      setStep('done');
+      toast.success(`Imported ${entries.length} transactions`);
+    } catch (error) {
+      logError('imports', error);
+      toast.error(
+        userMessage(
+          error,
+          'The import failed. No partial rows were silently dropped — review and retry.',
+        ),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reset() {
+    setStep('pick');
+    setParsed(null);
     setRows([]);
-  };
+    setFileName('');
+  }
+
   return (
-    <Page eyebrow="Local processing" title="Import CSV">
-      <div className="grid gap-5 lg:grid-cols-[.7fr_1.3fr]">
+    <Page title="Import CSV" description="Bring transactions in from a bank export.">
+      {step === 'pick' && (
         <Card>
-          <label className="grid min-h-40 cursor-pointer place-items-center rounded-2xl border border-dashed text-center">
+          <CardContent className="grid place-items-center gap-4 py-14 text-center">
+            <FileUp className="size-8 text-muted-foreground" />
             <div>
-              <FileSpreadsheet className="mx-auto mb-2 text-jade" />
-              <p className="font-semibold">{fileName || 'Choose a CSV file'}</p>
-              <p className="text-sm opacity-55">The file stays in your browser.</p>
+              <p className="font-medium">Choose a CSV file</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Everything is parsed on this device — the file never leaves your browser.
+              </p>
             </div>
-            <input
-              className="sr-only"
+            <Label htmlFor="csv-file" className="sr-only">
+              CSV file
+            </Label>
+            <Input
+              id="csv-file"
               type="file"
               accept=".csv,text/csv"
-              onChange={(e) => void choose(e.target.files?.[0])}
+              className="max-w-xs"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleFile(file);
+              }}
             />
-          </label>
-          {fields.length > 0 && (
-            <div className="mt-5 space-y-4">
-              <Select
-                label="Destination account"
-                value={accountId}
-                onChange={setAccountId}
-                options={accounts.filter((a) => !a.archived).map((a) => [a.id, a.name])}
-              />
-              <Select
-                label="Date column"
-                value={mapping.date}
-                onChange={(v) => setMapping({ ...mapping, date: v })}
-                options={fields.map((v) => [v, v])}
-              />
-              <Select
-                label="Description column"
-                value={mapping.description}
-                onChange={(v) => setMapping({ ...mapping, description: v })}
-                options={fields.map((v) => [v, v])}
-              />
-              <Select
-                label="Amount column"
-                value={mapping.amount ?? ''}
-                onChange={(v) => setMapping({ ...mapping, amount: v })}
-                options={fields.map((v) => [v, v])}
-              />
-              <Select
-                label="Date format"
-                value={dateFormat}
-                onChange={setDateFormat}
-                options={['MM/dd/yyyy', 'dd/MM/yyyy', 'yyyy-MM-dd'].map((v) => [v, v])}
-              />
-              <Button className="w-full" onClick={() => void preview()}>
-                <Upload size={18} />
-                Preview rows
+          </CardContent>
+        </Card>
+      )}
+
+      {step === 'map' && parsed && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Map the columns</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <p className="text-sm text-muted-foreground">
+              {fileName} · {parsed.rows.length} rows. Point each field at the matching column.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {mappingFields.map((field) => (
+                <div key={field.key} className="grid gap-1">
+                  <Label htmlFor={`map-${field.key}`} className="text-xs text-muted-foreground">
+                    {field.label}
+                  </Label>
+                  <Select
+                    value={mapping[field.key] || 'none'}
+                    onValueChange={(value) =>
+                      setMapping((current) => ({
+                        ...current,
+                        [field.key]: value === 'none' ? '' : value,
+                      }))
+                    }
+                  >
+                    <SelectTrigger id={`map-${field.key}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not in this file</SelectItem>
+                      {parsed.headers.map((header) => (
+                        <SelectItem key={header} value={header}>
+                          {header}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {field.hint && <p className="text-xs text-muted-foreground">{field.hint}</p>}
+                </div>
+              ))}
+              <div className="grid gap-1">
+                <Label htmlFor="map-date-format" className="text-xs text-muted-foreground">
+                  Date format
+                </Label>
+                <Select
+                  value={dateFormat}
+                  onValueChange={(value) => setDateFormat(value as CsvDateFormat)}
+                >
+                  <SelectTrigger id="map-date-format">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {csvDateFormats.map((formatOption) => (
+                      <SelectItem key={formatOption} value={formatOption}>
+                        {formatOption}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor="map-account" className="text-xs text-muted-foreground">
+                  Import into account
+                </Label>
+                <Select value={accountId} onValueChange={setAccountId}>
+                  <SelectTrigger id="map-account">
+                    <SelectValue placeholder="Pick an account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeAccounts.map((account) => (
+                      <SelectItem key={account.id} value={account.id}>
+                        {account.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={reset}>
+                <ArrowLeft /> Start over
+              </Button>
+              <Button
+                onClick={() => void buildPreview()}
+                disabled={!mappingValid || !accountId || busy}
+              >
+                Preview import <ArrowRight />
               </Button>
             </div>
-          )}
+            {!mappingValid && (
+              <p className="text-xs text-muted-foreground">
+                Map at least the date plus an amount (or debit/credit) column.
+              </p>
+            )}
+          </CardContent>
         </Card>
-        <Card>
-          <h2 className="font-display text-xl">Review</h2>
-          {rows.length ? (
-            <>
-              <div className="mt-4 max-h-[34rem] overflow-auto divide-y">
-                {rows.map((r, i) => (
-                  <label key={r.row} className="flex items-center gap-3 py-3">
-                    <input
-                      type="checkbox"
-                      checked={r.included && !r.duplicate}
-                      disabled={!r.valid || r.duplicate}
-                      onChange={(e) =>
-                        setRows((v) =>
-                          v.map((x, j) => (j === i ? { ...x, included: e.target.checked } : x)),
-                        )
-                      }
-                    />
-                    <div className="flex-1">
-                      <p className="font-semibold">{r.description || `Row ${r.row}`}</p>
-                      <p className="text-sm opacity-55">
-                        {r.error ??
-                          (r.duplicate ? 'Probable duplicate' : r.occurredAt.toLocaleDateString())}
-                      </p>
-                    </div>
-                    <span className="amount">{r.valid ? formatMoney(r.amountMinor) : '—'}</span>
-                  </label>
-                ))}
-              </div>
-              <Button className="mt-5" onClick={() => void runImport()}>
-                <CheckCircle2 size={18} />
-                Import selected rows
+      )}
+
+      {step === 'preview' && (
+        <div className="grid gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">
+              <CheckCircle2 /> {included.length} ready
+            </Badge>
+            {duplicates.length > 0 && (
+              <Badge variant="secondary">
+                <Copy /> {duplicates.length} probable duplicates
+              </Badge>
+            )}
+            {failed.length > 0 && (
+              <Badge variant="destructive">
+                <AlertTriangle /> {failed.length} failed validation
+              </Badge>
+            )}
+            <div className="ml-auto flex gap-2">
+              <Button variant="outline" onClick={() => setStep('map')}>
+                <ArrowLeft /> Back to mapping
               </Button>
-            </>
-          ) : (
-            <p className="grid min-h-64 place-items-center text-center opacity-55">
-              Map the file to preview normalized transactions and duplicate warnings.
+              <Button onClick={() => void runImport()} disabled={busy || included.length === 0}>
+                Import {included.length} rows
+              </Button>
+            </div>
+          </div>
+
+          <Card>
+            <CardContent className="overflow-x-auto p-0">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th scope="col" className="p-3">
+                      <span className="sr-only">Include</span>
+                    </th>
+                    <th scope="col" className="p-3">
+                      Date
+                    </th>
+                    <th scope="col" className="p-3">
+                      Description
+                    </th>
+                    <th scope="col" className="p-3">
+                      Category
+                    </th>
+                    <th scope="col" className="p-3 text-right">
+                      Amount
+                    </th>
+                    <th scope="col" className="p-3">
+                      Status
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr
+                      key={row.index}
+                      className={`border-b border-dashed last:border-b-0 ${row.error ? 'opacity-60' : ''}`}
+                    >
+                      <td className="p-3">
+                        <input
+                          type="checkbox"
+                          className="size-4 accent-(--primary)"
+                          checked={row.included}
+                          disabled={Boolean(row.error)}
+                          aria-label={`Include row ${row.index + 1}`}
+                          onChange={(event) => toggleRow(row.index, event.target.checked)}
+                        />
+                      </td>
+                      <td className="p-3 font-mono text-xs whitespace-nowrap">
+                        {row.occurredAt ? format(row.occurredAt, 'yyyy-MM-dd') : '—'}
+                      </td>
+                      <td className="max-w-56 truncate p-3">{row.description || '—'}</td>
+                      <td className="p-3 text-xs">
+                        {row.categoryId
+                          ? categories.find((category) => category.id === row.categoryId)?.name
+                          : row.categoryName
+                            ? `${row.categoryName} (no match)`
+                            : '—'}
+                      </td>
+                      <td className="p-3 text-right">
+                        {row.amountMinor != null && row.type ? (
+                          <Money
+                            minor={row.type === 'income' ? row.amountMinor : -row.amountMinor}
+                            signed
+                            tone="auto"
+                            className="text-sm"
+                          />
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="p-3 text-xs">
+                        {row.error ? (
+                          <span className="text-destructive">{row.error}</span>
+                        ) : row.duplicate === 'existing' ? (
+                          <span className="text-chart-2">Already in the ledger?</span>
+                        ) : row.duplicate === 'in-file' ? (
+                          <span className="text-chart-2">Repeated in this file</span>
+                        ) : (
+                          <span className="text-muted-foreground">OK</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {step === 'done' && (
+        <Card>
+          <CardContent className="grid place-items-center gap-3 py-14 text-center">
+            <CheckCircle2 className="size-8 text-income" />
+            <p className="font-medium">Imported {importedCount} transactions</p>
+            <p className="text-sm text-muted-foreground">
+              The account balance was updated in the same batch.
             </p>
-          )}
+            <Button onClick={reset}>Import another file</Button>
+          </CardContent>
         </Card>
-      </div>
+      )}
+
+      {history.length > 0 && step === 'pick' && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Previous imports</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-2 pt-0">
+            {history.map((record) => (
+              <div key={record.id} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 truncate">{record.fileName}</span>
+                <span className="text-xs text-muted-foreground">
+                  {record.importedCount}/{record.rowCount} rows ·{' '}
+                  {format(record.createdAt, 'MMM d, yyyy')}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
     </Page>
-  );
-}
-function Select({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: string[][];
-}) {
-  return (
-    <label>
-      <span className="label">{label}</span>
-      <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose</option>
-        {options.map(([v, l]) => (
-          <option key={v} value={v}>
-            {l}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }

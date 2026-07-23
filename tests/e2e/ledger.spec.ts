@@ -1,161 +1,146 @@
-import { test, expect } from '@playwright/test';
-async function enterAmount(page: import('@playwright/test').Page, value: string) {
-  await page.getByRole('button', { name: 'Clear calculator' }).click();
-  for (const character of value) {
-    await page
-      .getByRole('button', {
-        name: character === '.' ? 'Decimal point' : character,
-        exact: true,
-      })
-      .click();
-  }
+import { expect, test, type Page } from '@playwright/test';
+
+/**
+ * Full ledger workflow against the emulator suite. Tests run serially and
+ * build on each other's state (single worker, see playwright.config.ts).
+ */
+
+async function signIn(page: Page) {
+  await page.goto('/login');
+  await page.getByRole('button', { name: /emulator owner/i }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 15000 });
 }
-test('login screen renders', async ({ page }) => {
+
+async function dismissOfflineNotice(page: Page) {
+  const notice = page.getByRole('button', { name: 'Got it' });
+  if (await notice.isVisible().catch(() => false)) await notice.click();
+}
+
+/** In-app navigation (not page.goto) so the form's history-back stays an SPA transition. */
+async function openNewTransaction(page: Page) {
+  await page.getByRole('button', { name: 'New transaction' }).first().click();
+  await expect(page.getByRole('heading', { name: 'New transaction' })).toBeVisible();
+}
+
+test('login screen renders only the allowed sign-in options', async ({ page }) => {
   await page.goto('/login');
   await expect(page.getByRole('button', { name: /continue with google/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /emulator owner/i })).toBeVisible();
+  await expect(page.getByText(/sign up|register/i)).toHaveCount(0);
 });
-test('a zero-opening credit card can be created and edited', async ({ page }, testInfo) => {
-  const accountName = `${testInfo.project.name} Zero card`;
-  await page.goto('/login');
-  await page.getByRole('button', { name: /emulator owner/i }).click();
-  await expect(page.getByRole('link', { name: 'Accounts' }).last()).toBeVisible();
 
+test('owner can create an account', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
   await page.goto('/accounts');
-  await page.getByRole('button', { name: /new account/i }).click();
-  await page.getByRole('button', { name: 'Credit card' }).click();
-  await page.getByLabel('Account name').fill(accountName);
-  await page.getByRole('button', { name: 'Save account' }).click();
+  await page.getByRole('button', { name: 'New account' }).first().click();
+  await page.getByLabel('Account name').fill('E2E Wallet');
+  await page.getByLabel('Opening balance').fill('100.00');
+  await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByText('Account created')).toBeVisible();
-
-  const account = page.locator('article').filter({ hasText: accountName });
-  await expect(account).toBeVisible();
-  await account.getByRole('button', { name: 'Edit' }).click();
-  await expect(page.getByRole('heading', { name: 'Edit account' })).toBeVisible();
-  await page.getByLabel('Credit limit (optional)').fill('1800');
-  await page.getByRole('button', { name: 'Update account' }).click();
-
-  await expect(page.getByText('Account updated')).toBeVisible();
-  await expect(account).toContainText('Limit $1,800.00');
+  const card = page.locator('article, div').filter({ hasText: 'E2E Wallet' });
+  await expect(page.getByText('E2E Wallet')).toBeVisible();
+  await expect(card.getByText('$100.00').first()).toBeVisible();
 });
-test('owner can manage core ledger workflows', async ({ page }, testInfo) => {
-  const accountName = `${testInfo.project.name} E2E Cash`;
-  const expenseName = `${testInfo.project.name} E2E groceries`;
-  const incomeName = `${testInfo.project.name} E2E income`;
-  const transferName = `${testInfo.project.name} E2E transfer`;
-  await page.goto('/login');
-  await page.getByRole('button', { name: /emulator owner/i }).click();
-  await expect(page.getByRole('link', { name: 'Accounts' }).last()).toBeVisible();
+
+test('owner can record an expense that moves the balance', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
+  await openNewTransaction(page);
+  await page.getByLabel('Amount').fill('12.50');
+  await page.getByLabel('Account').click();
+  await page.getByRole('option', { name: 'E2E Wallet' }).click();
+  await page.getByLabel('Category').click();
+  await page.getByRole('option', { name: 'Groceries', exact: true }).click();
+  await page.getByLabel('Description').fill('E2E groceries');
+  await page.getByRole('button', { name: 'Record expense' }).click();
+  await expect(page.getByText('Expense recorded')).toBeVisible();
+
   await page.goto('/accounts');
-  await page.getByRole('button', { name: /new account/i }).click();
-  await page.getByLabel('Account name').fill(accountName);
-  await page.getByRole('button', { name: 'Save account' }).click();
-  await expect(
-    page.getByRole('region', { name: 'Accounts' }).getByText(accountName, { exact: true }),
-  ).toBeVisible();
-  await page.goto('/transactions/new');
-  await enterAmount(page, '10.00');
-  await page.getByRole('button', { name: 'Add', exact: true }).click();
-  for (const key of ['2', 'Decimal point', '5', '0']) {
-    await page.getByRole('button', { name: key, exact: true }).click();
-  }
-  await page.getByRole('button', { name: 'Equals' }).click();
-  await expect(page.getByRole('textbox', { name: 'Calculate amount' })).toHaveValue('12.5');
-  await page.getByLabel('Description').fill(expenseName);
-  await page.getByRole('button', { name: 'Account: Cash' }).click();
-  await page.getByRole('button', { name: /Groceries/ }).click();
-  await page.getByRole('button', { name: 'Save entry' }).click();
-  await expect(page.getByText(expenseName)).toBeVisible();
-
-  await page.goto('/transactions/new');
-  await page.getByRole('button', { name: 'Income' }).click();
-  await enterAmount(page, '100.00');
-  await page.getByLabel('Description').fill(incomeName);
-  await page.getByRole('button', { name: 'Account: Cash' }).click();
-  await page.getByRole('button', { name: /Salary/ }).click();
-  await page.getByRole('button', { name: 'Save entry' }).click();
-  await expect(page.getByText(incomeName)).toBeVisible();
-
-  await page.goto('/transactions/new');
-  await page.getByRole('button', { name: 'Transfer' }).click();
-  await expect(page.getByRole('heading', { name: 'Move money' })).toBeVisible();
-  await enterAmount(page, '5.00');
-  await page.getByLabel('Description').fill(transferName);
-  await page.getByRole('button', { name: 'From account: Cash' }).click();
-  await page.getByRole('button', { name: 'To account: Savings' }).click();
-  await page.getByRole('button', { name: 'Save entry' }).click();
-  await expect(page.getByText(transferName).first()).toBeVisible();
-
-  const expenseRow = page.getByRole('row').filter({ hasText: expenseName });
-  await expenseRow.getByRole('link', { name: 'Edit' }).click();
-  const editedExpenseName = `${expenseName} edited`;
-  await page.getByLabel('Description').fill(editedExpenseName);
-  await page.getByRole('button', { name: 'Update entry' }).click();
-  const editedRow = page.getByRole('row').filter({ hasText: editedExpenseName });
-  await editedRow.getByRole('button', { name: 'Delete' }).click();
-  await page.getByRole('button', { name: 'Confirm' }).click();
-  await expect(page.getByText(editedExpenseName)).not.toBeVisible();
-
-  await page.goto('/budgets');
-  await page.getByRole('button', { name: /new budget/i }).click();
-  await page.getByLabel('Expense category').selectOption({ label: 'Housing' });
-  await page.getByLabel('Monthly limit').fill('400.00');
-  await page.getByRole('button', { name: 'Save budget' }).click();
-  await expect(page.locator('p').filter({ hasText: /^Housing$/ })).toBeVisible();
-
-  await page.goto('/settings/backup');
-  const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download backup' }).click();
-  expect((await download).suggestedFilename()).toMatch(/personal-ledger.*backup\.json/);
+  await expect(page.getByText('$87.50').first()).toBeVisible();
 });
 
-test('owner can customize categories, cards, and the black theme', async ({ page }, testInfo) => {
-  const parentName = `${testInfo.project.name} Leisure`;
-  const childName = `${testInfo.project.name} Games`;
-  const renamedChild = `${childName} & apps`;
+test('owner can record income', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
+  await openNewTransaction(page);
+  await page.getByRole('tab', { name: 'Income' }).click();
+  await page.getByLabel('Amount').fill('50.00');
+  await page.getByLabel('Account').click();
+  await page.getByRole('option', { name: 'E2E Wallet' }).click();
+  await page.getByLabel('Description').fill('E2E refund');
+  await page.getByRole('button', { name: 'Record income' }).click();
+  await expect(page.getByText('Income recorded')).toBeVisible();
 
-  await page.goto('/login');
-  await page.getByRole('button', { name: /emulator owner/i }).click();
-  await expect(page.getByRole('link', { name: 'Accounts' }).last()).toBeVisible();
+  await page.goto('/accounts');
+  await expect(page.getByText('$137.50').first()).toBeVisible();
+});
 
-  await page.goto('/categories');
-  await page.getByRole('button', { name: /new category/i }).click();
-  await page.getByLabel('Category name').fill(parentName);
-  await page.getByRole('button', { name: 'Entertainment' }).click();
-  await page.getByRole('button', { name: 'Create category' }).click();
-  const hierarchy = page.getByLabel('Expense category hierarchy');
-  await expect(hierarchy.getByText(parentName, { exact: true })).toBeVisible();
+test('owner can transfer between accounts atomically', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
+  await openNewTransaction(page);
+  await page.getByRole('tab', { name: 'Transfer' }).click();
+  await page.getByLabel('Amount').fill('37.50');
+  await page.getByLabel('From account').click();
+  await page.getByRole('option', { name: 'E2E Wallet' }).click();
+  await page.getByLabel('To account').click();
+  await page.getByRole('option', { name: 'Savings' }).click();
+  await page.getByRole('button', { name: 'Record transfer' }).click();
+  await expect(page.getByText('Transfer recorded')).toBeVisible();
 
-  await page.getByRole('button', { name: `Edit ${parentName}` }).click();
-  await expect(page.getByRole('button', { name: 'Entertainment' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-  await page.getByRole('button', { name: 'Close category editor' }).click();
+  await page.goto('/accounts');
+  await expect(page.getByText('$100.00').first()).toBeVisible(); // 137.50 − 37.50
+});
 
-  await page.getByRole('button', { name: `Add subcategory to ${parentName}` }).click();
-  await page.getByLabel('Category name').fill(childName);
-  await page.getByRole('button', { name: 'Create category' }).click();
-  await expect(hierarchy.getByText(childName, { exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: `Edit ${childName}` }).click();
-  await page.getByLabel('Category name').fill(renamedChild);
+test('owner can edit and delete a transaction with balance integrity', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
+  await page.goto('/transactions');
+  await page
+    .getByRole('button', { name: /E2E groceries/ })
+    .first()
+    .click();
+  await expect(page.getByRole('heading', { name: 'Edit transaction' })).toBeVisible();
+  await page.getByLabel('Amount').fill('20.00');
   await page.getByRole('button', { name: 'Save changes' }).click();
-  await expect(hierarchy.getByText(renamedChild, { exact: true })).toBeVisible();
-
+  await expect(page.getByText('Transaction updated')).toBeVisible();
   await page.goto('/accounts');
-  const creditCard = page.locator('article').filter({ hasText: 'Everyday card' });
-  await expect(creditCard.getByText('Amount owed')).toBeVisible();
-  await expect(creditCard.getByText('Available')).toBeVisible();
-  await expect(creditCard).toContainText('Limit $2,500.00');
+  await expect(page.getByText('$92.50').first()).toBeVisible(); // 100 − (20 − 12.50)
 
-  await page.goto('/settings');
-  await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await expect(page.locator('html')).toHaveClass(/dark/);
-  await expect
-    .poll(() =>
-      page.locator('body').evaluate((element) => getComputedStyle(element).backgroundColor),
-    )
-    .toBe('rgb(5, 6, 5)');
-  await page.getByRole('button', { name: 'System', exact: true }).click();
+  await page.goto('/transactions');
+  await page
+    .getByRole('button', { name: /E2E refund/ })
+    .first()
+    .click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('button', { name: 'Delete', exact: true }).last().click();
+  await expect(page.getByText('Transaction deleted')).toBeVisible();
+  await page.goto('/accounts');
+  await expect(page.getByText('$42.50').first()).toBeVisible(); // 92.50 − 50
+});
+
+test('owner can create a budget and see usage', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
+  await page.goto('/budgets');
+  await page.getByRole('button', { name: 'New budget' }).first().click();
+  await page.getByLabel('Category').click();
+  await page.getByRole('option', { name: 'Restaurants' }).click();
+  await page.getByLabel('Monthly limit').fill('200.00');
+  await page.getByRole('button', { name: 'Create budget' }).click();
+  await expect(page.getByText('Budget created')).toBeVisible();
+  await expect(page.getByText('Restaurants')).toBeVisible();
+  await expect(page.getByText('$200.00').first()).toBeVisible();
+});
+
+test('owner can export a JSON backup', async ({ page }) => {
+  await signIn(page);
+  await dismissOfflineNotice(page);
+  await page.goto('/settings/backup');
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download backup' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/pocket-ledger-.*\.backup\.json/);
+  await expect(page.getByText('Backup downloaded')).toBeVisible();
 });

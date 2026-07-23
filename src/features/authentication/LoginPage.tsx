@@ -1,60 +1,89 @@
-import { Landmark, LockKeyhole, WifiOff } from 'lucide-react';
+import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Button } from '@/components/ui/Button';
-import { useAuth } from './AuthProvider';
-import { env } from '@/lib/firebase';
-export function LoginPage() {
-  const { user, login, emulatorLogin } = useAuth();
-  if (user) return <Navigate to="/dashboard" replace />;
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { usingEmulators } from '@/lib/firebase';
+import { userMessage, logError } from '@/lib/errors';
+import { useAuth } from '@/features/authentication/AuthProvider';
+
+function GoogleMark() {
   return (
-    <main className="grid min-h-screen lg:grid-cols-[1.08fr_.92fr]">
-      <section className="flex flex-col justify-between bg-jade p-8 text-oat lg:p-16">
-        <div className="flex items-center gap-3 font-display">
-          <span className="grid size-10 place-items-center rounded-xl bg-oat text-jade">
-            <Landmark />
-          </span>{' '}
-          Personal Ledger
-        </div>
-        <div className="max-w-xl py-20">
-          <p className="mb-5 font-mono text-xs uppercase tracking-[.22em] text-oat/65">
-            Your money, held close
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.45a5.52 5.52 0 0 1-2.39 3.62v3h3.87c2.26-2.09 3.57-5.17 3.57-8.81Z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 24c3.24 0 5.96-1.07 7.93-2.91l-3.87-3c-1.07.72-2.44 1.14-4.06 1.14-3.12 0-5.77-2.11-6.71-4.95H1.29v3.1A12 12 0 0 0 12 24Z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.29 14.28a7.2 7.2 0 0 1 0-4.56v-3.1H1.29a12 12 0 0 0 0 10.76l4-3.1Z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 4.77c1.76 0 3.34.61 4.58 1.8l3.44-3.44A11.98 11.98 0 0 0 1.29 6.62l4 3.1C6.23 6.88 8.88 4.77 12 4.77Z"
+      />
+    </svg>
+  );
+}
+
+export function LoginPage() {
+  const { user, signInWithGoogle, signInAsEmulatorOwner } = useAuth();
+  const [busy, setBusy] = useState(false);
+
+  if (user) return <Navigate to="/dashboard" replace />;
+
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    try {
+      await action();
+    } catch (error) {
+      logError('login', error);
+      toast.error(userMessage(error, 'Sign-in did not complete. Try again.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="grid min-h-dvh place-items-center bg-background p-6">
+      <div className="w-full max-w-sm">
+        <div className="mb-10 text-center">
+          <img src="/icon.svg" alt="" className="mx-auto mb-4 size-14" />
+          <h1 className="font-display text-3xl font-semibold tracking-tight">Pocket Ledger</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Your private ledger. One account, no sign-ups.
           </p>
-          <h1 className="font-display text-5xl leading-[1.04] sm:text-7xl">
-            A quieter way to know where you stand.
-          </h1>
-          <p className="mt-7 max-w-md text-lg text-oat/75">
-            One private ledger for accounts, spending plans, and the small decisions that shape a
-            month.
-          </p>
         </div>
-        <p className="text-sm text-oat/60">
-          No bank connections. No advertising. No shared profiles.
-        </p>
-      </section>
-      <section className="flex items-center justify-center p-6">
-        <div className="w-full max-w-sm">
-          <p className="eyebrow">Private access</p>
-          <h2 className="mt-3 font-display text-3xl">Open your ledger</h2>
-          <p className="mb-8 mt-3 text-ink/60">Only the configured owner account can continue.</p>
-          <Button className="w-full" onClick={() => void login()}>
-            <LockKeyhole size={18} />
+        <div className="flex flex-col gap-3">
+          <Button
+            size="lg"
+            variant="outline"
+            className="w-full"
+            disabled={busy}
+            onClick={() => run(signInWithGoogle)}
+          >
+            <GoogleMark />
             Continue with Google
           </Button>
-          {env.VITE_USE_FIREBASE_EMULATORS === 'true' && (
+          {usingEmulators && (
             <Button
-              className="mt-3 w-full"
+              size="lg"
               variant="secondary"
-              onClick={() => void emulatorLogin()}
+              className="w-full"
+              disabled={busy}
+              onClick={() => run(signInAsEmulatorOwner)}
             >
-              Continue as emulator owner
+              Emulator owner (local only)
             </Button>
           )}
-          <div className="mt-8 flex gap-3 rounded-2xl bg-mist/55 p-4 text-sm">
-            <WifiOff className="shrink-0 text-jade" size={19} />
-            <p>Offline storage is optional and should only be enabled on a trusted device.</p>
-          </div>
         </div>
-      </section>
+        <p className="mt-8 text-center text-xs text-muted-foreground">
+          Only the configured owner account can open this ledger.
+        </p>
+      </div>
     </main>
   );
 }

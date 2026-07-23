@@ -1,17 +1,39 @@
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { it, vi } from 'vitest';
-import { LoginPage } from '@/features/authentication/LoginPage';
+
+const signInWithGoogle = vi.fn().mockResolvedValue(undefined);
+const signInAsEmulatorOwner = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('@/lib/firebase', () => ({ usingEmulators: true }));
 vi.mock('@/features/authentication/AuthProvider', () => ({
-  useAuth: () => ({ user: null, login: vi.fn(), emulatorLogin: vi.fn() }),
+  useAuth: () => ({
+    user: null,
+    loading: false,
+    signInWithGoogle,
+    signInAsEmulatorOwner,
+    signOutUser: vi.fn(),
+  }),
 }));
-vi.mock('@/lib/firebase', () => ({ env: { VITE_USE_FIREBASE_EMULATORS: 'false' } }));
-it('renders the single production login action', () => {
-  render(
-    <MemoryRouter>
-      <LoginPage />
-    </MemoryRouter>,
-  );
-  expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
-  expect(screen.queryByText(/register/i)).not.toBeInTheDocument();
+
+import { LoginPage } from '@/features/authentication/LoginPage';
+
+describe('LoginPage', () => {
+  it('offers only Google sign-in plus the local emulator shortcut', async () => {
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: 'Pocket Ledger' })).toBeInTheDocument();
+    const google = screen.getByRole('button', { name: /continue with google/i });
+    expect(google).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /emulator owner/i })).toBeInTheDocument();
+    // no registration workflow of any kind
+    expect(screen.queryByText(/sign up|register|create account/i)).not.toBeInTheDocument();
+
+    await userEvent.click(google);
+    expect(signInWithGoogle).toHaveBeenCalledOnce();
+  });
 });

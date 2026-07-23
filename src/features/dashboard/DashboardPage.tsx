@@ -1,10 +1,9 @@
-import { addMonths, format, isSameDay, startOfMonth } from 'date-fns';
-import { ChevronLeft, ChevronRight, Plus, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { getDocs } from 'firebase/firestore';
 import {
   Bar,
   BarChart,
-  CartesianGrid,
   Cell,
   Pie,
   PieChart,
@@ -13,299 +12,512 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { CategoryIcon } from '@/components/categories/CategoryIcon';
-import { Button } from '@/components/ui/Button';
+import { format } from 'date-fns';
+import {
+  ArrowRight,
+  CalendarClock,
+  ChartLine,
+  Check,
+  FileUp,
+  Plus,
+  SkipForward,
+  Target,
+  Wallet,
+} from 'lucide-react';
+import { toast } from 'sonner';
 import { Page } from '@/components/layout/Page';
-import { useData } from '@/app/DataProvider';
-import { dashboardMetrics, budgetStatus } from '@/services/finance';
-import { formatMoney } from '@/lib/money';
-import { asDate } from '@/lib/dates';
+import { MonthSwitcher } from '@/components/month-switcher';
+import { Money } from '@/components/money';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
+import { CategoryIcon } from '@/components/categories/CategoryIcon';
+import {
+  ChartTooltip,
+  categoricalColors,
+  expenseColor,
+  incomeColor,
+  moneyTick,
+  otherColor,
+} from '@/components/charts/chart-theme';
+import { monthRange, shiftMonthKey } from '@/lib/dates';
+import { logError, userMessage } from '@/lib/errors';
+import { useLedger } from '@/app/DataProvider';
+import { parseTransaction, transactionsInRange } from '@/services/repositories';
+import { confirmRecurring, skipRecurring } from '@/services/finance';
+import { computeBudgetStatus } from '@/services/budgets';
+import { expenseTotal, foldTop, incomeTotal, totalsByCategory } from '@/services/reports';
+import { AccountFormDialog } from '@/features/accounts/AccountForm';
+import { TransactionList } from '@/features/transactions/TransactionList';
+
+const quickLinks = [
+  { to: '/recurring', label: 'Planned payments', icon: CalendarClock },
+  { to: '/budgets', label: 'Budgets', icon: Target },
+  { to: '/reports', label: 'Reports', icon: ChartLine },
+  { to: '/imports', label: 'Import CSV', icon: FileUp },
+] as const;
+
 export function DashboardPage() {
-  const { month, setMonth, accounts, transactions, budgets, categories, recurring, loading } =
-    useData();
-  const metrics = dashboardMetrics(transactions);
-  const currency = accounts[0]?.currency ?? 'USD';
-  const byCategory = categories
-    .filter((c) => c.type === 'expense')
-    .map((c) => ({
-      name: c.name,
-      value: transactions
-        .filter((t) => t.type === 'expense' && t.categoryId === c.id)
-        .reduce((n, t) => n + t.amountMinor, 0),
-    }))
-    .filter((v) => v.value > 0);
-  const bars = [
-    { name: 'Income', value: metrics.income },
-    { name: 'Expenses', value: metrics.expenses },
-  ];
-  const current = accounts.reduce((n, a) => n + a.currentBalanceMinor, 0);
-  const visibleAccounts = accounts.slice(0, 3);
-  const topCategory = byCategory.reduce<(typeof byCategory)[number] | undefined>(
-    (largest, item) => (!largest || item.value > largest.value ? item : largest),
-    undefined,
+  const ledger = useLedger();
+  const {
+    uid,
+    accounts,
+    activeAccounts,
+    categories,
+    month,
+    monthTransactions,
+    monthBudgets,
+    recurring,
+    loading,
+  } = ledger;
+  const navigate = useNavigate();
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+
+  const income = useMemo(() => incomeTotal(monthTransactions), [monthTransactions]);
+  const expenses = useMemo(() => expenseTotal(monthTransactions), [monthTransactions]);
+  const totalBalance = useMemo(
+    () => activeAccounts.reduce((total, account) => total + account.currentBalanceMinor, 0),
+    [activeAccounts],
   );
 
+  const categorySpend = useMemo(
+    () => foldTop(totalsByCategory(monthTransactions, categories, 'expense'), 5),
+    [monthTransactions, categories],
+  );
+
+  // "vs past period to date": last month's spending over the same number of
+  // elapsed days. One bounded fetch per month selection.
+  const [previousExpenses, setPreviousExpenses] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPreviousExpenses(null);
+    const current = monthRange(month);
+    const previous = monthRange(shiftMonthKey(month, -1));
+    const now = new Date();
+    const elapsedMs =
+      now >= current.start && now < current.end
+        ? now.getTime() - current.start.getTime()
+        : current.end.getTime() - current.start.getTime();
+    const compareEnd = new Date(
+      Math.min(previous.start.getTime() + elapsedMs, previous.end.getTime()),
+    );
+    getDocs(transactionsInRange(uid, previous.start, compareEnd))
+      .then((snap) => {
+        if (!cancelled) setPreviousExpenses(expenseTotal(snap.docs.map(parseTransaction)));
+      })
+      .catch((error) => logError('dashboard', error));
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, month]);
+
+  const spendChangePct =
+    previousExpenses !== null && previousExpenses > 0
+      ? Math.round(((expenses - previousExpenses) / previousExpenses) * 100)
+      : null;
+
+  const budgetStatuses = useMemo(
+    () =>
+      monthBudgets
+        .map((budget) => computeBudgetStatus(budget, monthTransactions))
+        .sort((a, b) => b.ratio - a.ratio),
+    [monthBudgets, monthTransactions],
+  );
+  const budgetAlerts = budgetStatuses.filter((status) => status.state !== 'ok');
+
+  const now = new Date();
+  const dueRecurring = recurring.filter((item) => item.active && item.nextOccurrence <= now);
+  const upcomingRecurring = recurring
+    .filter((item) => item.active && item.nextOccurrence > now)
+    .slice(0, 5);
+  const recentTransactions = monthTransactions.slice(0, 8);
+
+  async function confirmDue(id: string) {
+    const item = dueRecurring.find((candidate) => candidate.id === id);
+    if (!item) return;
+    try {
+      await confirmRecurring(ledger, item);
+      toast.success(`Recorded “${item.description}”`);
+    } catch (error) {
+      logError('recurring', error);
+      toast.error(userMessage(error, 'The occurrence was not recorded. Try again.'));
+    }
+  }
+
+  async function skipDue(id: string) {
+    const item = dueRecurring.find((candidate) => candidate.id === id);
+    if (!item) return;
+    try {
+      await skipRecurring(uid, item);
+      toast.success(`Skipped “${item.description}”`);
+    } catch (error) {
+      logError('recurring', error);
+      toast.error(userMessage(error));
+    }
+  }
+
+  if (loading) {
+    return (
+      <Page title="Dashboard" actions={<MonthSwitcher />}>
+        <Skeleton className="h-24" />
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }, (_, index) => (
+            <Skeleton key={index} className="h-16" />
+          ))}
+        </div>
+        <Skeleton className="mt-4 h-72" />
+      </Page>
+    );
+  }
+
+  if (accounts.length === 0) {
+    return (
+      <Page title="Dashboard" actions={<MonthSwitcher />}>
+        <EmptyState
+          icon={Wallet}
+          title="Welcome to your ledger"
+          description="Create your first account, then record a transaction to see the month take shape."
+          action={
+            <Button onClick={() => navigate('/accounts')}>
+              <Plus /> Create an account
+            </Button>
+          }
+        />
+      </Page>
+    );
+  }
+
+  const flowData = [
+    { name: 'Income', value: income, fill: incomeColor },
+    { name: 'Expenses', value: expenses, fill: expenseColor },
+  ];
+
   return (
-    <Page
-      eyebrow="Monthly ledger"
-      title={format(month, 'MMMM yyyy')}
-      action={
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            aria-label="Previous month"
-            onClick={() => setMonth(addMonths(month, -1))}
-          >
-            <ChevronLeft />
-          </Button>
-          <Button
-            variant="secondary"
-            aria-label="Next month"
-            onClick={() => setMonth(addMonths(month, 1))}
-          >
-            <ChevronRight />
-          </Button>
+    <Page title="Dashboard" actions={<MonthSwitcher />}>
+      {dueRecurring.length > 0 && (
+        <Card className="mb-4 border-primary/40">
+          <CardContent className="grid gap-2 py-4">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <CalendarClock className="size-4 text-primary" />
+              {dueRecurring.length === 1
+                ? '1 recurring transaction is due'
+                : `${dueRecurring.length} recurring transactions are due`}
+            </p>
+            <ul className="grid gap-1.5">
+              {dueRecurring.slice(0, 3).map((item) => (
+                <li key={item.id} className="flex items-center gap-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">{item.description}</span>
+                  <Money
+                    minor={item.type === 'income' ? item.amountMinor : -item.amountMinor}
+                    signed
+                    tone="auto"
+                    className="text-sm"
+                  />
+                  <Button size="sm" variant="outline" onClick={() => void confirmDue(item.id)}>
+                    <Check /> Confirm
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Skip ${item.description}`}
+                    onClick={() => void skipDue(item.id)}
+                  >
+                    <SkipForward />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            {dueRecurring.length > 3 && (
+              <Link to="/recurring" className="text-xs text-primary hover:underline">
+                See all due items
+              </Link>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* List of accounts — colored chips, like a wallet laid open. */}
+      <section aria-label="Accounts">
+        <div className="mb-2 flex items-baseline justify-between">
+          <h2 className="font-display text-base font-semibold">Accounts</h2>
+          <span className="text-sm text-muted-foreground">
+            Total{' '}
+            <Money
+              minor={totalBalance}
+              tone={totalBalance < 0 ? 'expense' : 'neutral'}
+              className="text-sm font-semibold"
+            />
+          </span>
         </div>
-      }
-    >
-      <section className="mb-8 space-y-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="font-display text-2xl">List of accounts</h2>
-            <p className="mt-1 text-sm opacity-60">Quickly scan balances before opening details.</p>
-          </div>
-          <Button asChild variant="secondary" className="w-full sm:w-auto">
-            <Link to="/accounts">Account detail</Link>
-          </Button>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {visibleAccounts.map((account, index) => (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          {activeAccounts.map((account, index) => (
             <Link
               key={account.id}
               to={`/accounts/${account.id}`}
-              className={`min-h-24 rounded-2xl p-4 text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-                index === 0 ? 'bg-apricot' : 'bg-ink/55 dark:bg-white/15'
-              }`}
+              className="rounded-lg p-3 text-white shadow-xs outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/60"
+              style={{ background: categoricalColors[index % categoricalColors.length] }}
             >
-              <p className="truncate text-lg font-semibold">{account.name}</p>
-              <p className="amount mt-1 text-2xl font-semibold">
-                {formatMoney(account.currentBalanceMinor, account.currency)}
-              </p>
+              <span className="block truncate text-xs font-medium opacity-90">{account.name}</span>
+              <Money minor={account.currentBalanceMinor} className="text-lg font-semibold" />
             </Link>
           ))}
-          <Link
-            to="/accounts"
-            className="flex min-h-24 items-center justify-between rounded-2xl border-2 border-jade/55 p-4 text-jade transition hover:bg-jade/10 dark:text-[#75cbb9]"
+          <button
+            type="button"
+            onClick={() => setAddAccountOpen(true)}
+            className="grid place-items-center rounded-lg border border-dashed border-primary/60 p-3 text-sm font-medium text-primary outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
           >
-            <span className="text-xl font-semibold">Add account</span>
-            <Plus className="rounded-full bg-jade text-white" size={28} />
-          </Link>
+            <span className="flex items-center gap-1.5">
+              <Plus className="size-4" /> Add account
+            </span>
+          </button>
         </div>
-        <div className="grid gap-3 rounded-3xl bg-ink/[.035] p-3 dark:bg-white/[.045] sm:grid-cols-4">
-          <Summary
-            label="Current balance"
-            value={formatMoney(current, currency)}
-            icon={<Wallet />}
-          />
-          <Summary
-            label="Income"
-            value={formatMoney(metrics.income, currency)}
-            icon={<TrendingUp />}
-          />
-          <Summary
-            label="Expenses"
-            value={formatMoney(metrics.expenses, currency)}
-            icon={<TrendingDown />}
-          />
-          <Summary
-            label="Net flow"
-            value={formatMoney(metrics.net, currency)}
-            icon={<span className="font-mono">{metrics.savingsRate}%</span>}
-          />
-        </div>
+        <AccountFormDialog open={addAccountOpen} onOpenChange={setAddAccountOpen} />
       </section>
-      {loading ? (
-        <div className="animate-pulse border-y py-8">Loading your month…</div>
-      ) : (
-        <div className="grid gap-6 xl:grid-cols-[1.15fr_.85fr]">
-          <div className="space-y-6">
-            <section className="card">
-              <h2 className="font-display text-lg">Income and expenses</h2>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={bars}>
-                    <CartesianGrid vertical={false} strokeOpacity={0.1} />
-                    <XAxis dataKey="name" />
-                    <YAxis hide />
-                    <Tooltip formatter={(v) => formatMoney(Number(v), currency)} />
-                    <Bar dataKey="value" radius={[9, 9, 0, 0]}>
-                      {bars.map((_, i) => (
-                        <Cell key={i} fill={i === 0 ? '#176B5B' : '#E98563'} />
+
+      {/* Quick links, one swipe away. */}
+      <nav aria-label="Quick links" className="mt-4 flex gap-2 overflow-x-auto pb-1">
+        {quickLinks.map((link) => (
+          <Link
+            key={link.to}
+            to={link.to}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1.5 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <link.icon className="size-3.5" /> {link.label}
+          </Link>
+        ))}
+      </nav>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Expenses structure</CardTitle>
+            <Link to="/reports" className="text-xs text-primary hover:underline">
+              Go deeper <ArrowRight className="inline size-3" />
+            </Link>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-3 flex items-baseline justify-between">
+              <div>
+                <p className="text-xs tracking-wide text-muted-foreground uppercase">This month</p>
+                <Money minor={expenses} className="text-2xl font-semibold" />
+              </div>
+              {spendChangePct !== null && (
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">vs past period to date</p>
+                  <p
+                    className={`font-mono text-lg font-semibold ${
+                      spendChangePct > 0 ? 'text-expense' : 'text-income'
+                    }`}
+                  >
+                    {spendChangePct > 0 ? '+' : ''}
+                    {spendChangePct}%
+                  </p>
+                </div>
+              )}
+            </div>
+            {categorySpend.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                No expenses this month yet.
+              </p>
+            ) : (
+              <div className="flex items-center gap-4">
+                <div className="relative h-44 w-44 shrink-0">
+                  <ResponsiveContainer>
+                    <PieChart>
+                      <Pie
+                        data={categorySpend}
+                        dataKey="totalMinor"
+                        nameKey="name"
+                        innerRadius="66%"
+                        outerRadius="100%"
+                        paddingAngle={2}
+                        stroke="var(--card)"
+                        strokeWidth={2}
+                      >
+                        {categorySpend.map((entry, index) => (
+                          <Cell
+                            key={entry.name}
+                            fill={entry.isOther ? otherColor : categoricalColors[index]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<ChartTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 grid place-items-center text-center"
+                  >
+                    <div>
+                      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
+                        Spent
+                      </p>
+                      <Money minor={expenses} className="text-sm font-semibold" />
+                    </div>
+                  </div>
+                </div>
+                <ul className="min-w-0 flex-1" aria-label="Spending by category">
+                  {categorySpend.map((entry, index) => (
+                    <li key={entry.name} className="flex items-center gap-2 py-1 text-sm">
+                      <span
+                        aria-hidden="true"
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{
+                          background: entry.isOther ? otherColor : categoricalColors[index],
+                        }}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <Money minor={entry.totalMinor} className="text-xs" />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Income vs expenses</CardTitle>
+            <span className="text-xs text-muted-foreground">
+              Net{' '}
+              <Money
+                minor={income - expenses}
+                signed
+                tone="auto"
+                className="text-xs font-semibold"
+              />
+            </span>
+          </CardHeader>
+          <CardContent>
+            {income === 0 && expenses === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Nothing recorded this month yet.
+              </p>
+            ) : (
+              <div className="h-40">
+                <ResponsiveContainer>
+                  <BarChart data={flowData} layout="vertical" margin={{ left: 8, right: 48 }}>
+                    <XAxis type="number" hide domain={[0, 'dataMax']} />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      width={70}
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }}
+                    />
+                    <Tooltip content={<ChartTooltip />} cursor={{ fill: 'var(--muted)' }} />
+                    <Bar
+                      dataKey="value"
+                      name="Amount"
+                      radius={[0, 4, 4, 0]}
+                      barSize={22}
+                      label={{
+                        position: 'right',
+                        fill: 'var(--foreground)',
+                        fontSize: 12,
+                        formatter: (value: unknown) => moneyTick(Number(value)),
+                      }}
+                    >
+                      {flowData.map((entry) => (
+                        <Cell key={entry.name} fill={entry.fill} />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </section>
-            <section className="card">
-              <h2 className="font-display text-lg">Recent transactions</h2>
-              <div className="mt-3 divide-y">
-                {transactions.slice(0, 7).map((t) => (
-                  <div key={t.id} className="flex items-center justify-between py-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className="grid size-8 shrink-0 place-items-center text-jade dark:text-[#67c7b5]">
-                        <CategoryIcon
-                          icon={categories.find((c) => c.id === t.categoryId)?.icon}
-                          size={17}
-                        />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="font-semibold">{t.description}</p>
-                        <p className="text-sm opacity-55">
-                          {format(asDate(t.occurredAt), 'MMM d')} ·{' '}
-                          {categories.find((c) => c.id === t.categoryId)?.name ?? 'Transfer'}
-                        </p>
-                      </div>
-                    </div>
-                    <p
-                      className={`amount font-semibold ${t.type === 'income' ? 'text-jade' : t.type === 'expense' ? 'text-apricot' : ''}`}
-                    >
-                      {t.type === 'expense' || t.transferRole === 'source' ? '-' : '+'}
-                      {formatMoney(t.amountMinor, t.currency)}
-                    </p>
-                  </div>
-                ))}
-                {transactions.length === 0 && (
-                  <p className="py-8 text-center opacity-60">Add the first entry for this month.</p>
-                )}
-              </div>
-            </section>
-          </div>
-          <div className="space-y-6">
-            <section className="card relative overflow-hidden">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="font-display text-2xl">Expenses structure</h2>
-                  <p className="eyebrow mt-4">Last 30 days</p>
-                  <p className="amount mt-1 text-4xl font-semibold">
-                    {formatMoney(metrics.expenses, currency)}
-                  </p>
-                </div>
-                <Button asChild variant="secondary" className="rounded-full">
-                  <Link to="/reports">Go deeper</Link>
-                </Button>
-              </div>
-              {byCategory.length ? (
-                <div className="relative h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={byCategory}
-                        dataKey="value"
-                        nameKey="name"
-                        innerRadius="54%"
-                        outerRadius="82%"
-                        paddingAngle={2}
-                      >
-                        {byCategory.map((_, i) => (
-                          <Cell
-                            key={i}
-                            fill={['#176B5B', '#E98563', '#81A69D', '#C4A882', '#657C75'][i % 5]}
-                          />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v) => formatMoney(Number(v), currency)} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  {topCategory && (
-                    <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
-                      <p className="max-w-28 text-lg font-semibold leading-tight">
-                        {topCategory.name}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="py-12 text-center opacity-60">Spending will appear here.</p>
-              )}
-            </section>
-            <section className="card">
-              <h2 className="font-display text-lg">Budget watch</h2>
-              <div className="mt-4 space-y-4">
-                {budgets.map((b) => {
-                  const spent = transactions
-                    .filter((t) => t.type === 'expense' && t.categoryId === b.categoryId)
-                    .reduce((n, t) => n + t.amountMinor, 0);
-                  const status = budgetStatus(b, spent);
-                  return (
-                    <div key={b.id}>
-                      <div className="mb-1 flex justify-between gap-3 text-sm">
-                        <span className="flex items-center gap-2">
-                          <CategoryIcon
-                            icon={categories.find((c) => c.id === b.categoryId)?.icon}
-                            className="text-jade dark:text-[#67c7b5]"
-                            size={15}
-                          />
-                          {categories.find((c) => c.id === b.categoryId)?.name}
-                        </span>
-                        <span className="amount">{Math.round(status.usage)}%</span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-mist">
-                        <div
-                          className={`h-full rounded-full ${status.state === 'exceeded' ? 'bg-apricot' : 'bg-jade'}`}
-                          style={{ width: `${Math.min(100, status.usage)}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-                {!budgets.length && <p className="opacity-60">No budgets set for this month.</p>}
-              </div>
-            </section>
-            <section className="card">
-              <h2 className="font-display text-lg">Coming up</h2>
-              <div className="mt-3">
-                {recurring
-                  .filter((r) => r.active && asDate(r.nextOccurrence) >= startOfMonth(month))
-                  .slice(0, 4)
-                  .map((r) => (
-                    <div key={r.id} className="flex justify-between border-b py-3">
-                      <span>{r.description}</span>
-                      <span className="text-sm opacity-60">
-                        {isSameDay(asDate(r.nextOccurrence), new Date())
-                          ? 'Today'
-                          : format(asDate(r.nextOccurrence), 'MMM d')}
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </section>
-          </div>
-        </div>
-      )}
-      <Button
-        asChild
-        className="fixed bottom-24 right-5 z-20 size-16 rounded-2xl p-0 shadow-xl lg:hidden"
-        aria-label="Add transaction"
-      >
-        <Link to="/transactions/new">
-          <Plus size={32} />
-        </Link>
-      </Button>
-    </Page>
-  );
-}
-
-function Summary({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl bg-white/60 p-4 dark:bg-white/[.06]">
-      <div className="mb-3 flex items-center justify-between gap-3 text-sm opacity-70">
-        <span>{label}</span>
-        <span className="grid size-8 place-items-center rounded-full bg-jade/10 text-jade dark:text-[#75cbb9]">
-          {icon}
-        </span>
+            )}
+          </CardContent>
+        </Card>
       </div>
-      <p className="amount text-xl font-semibold">{value}</p>
-    </div>
+
+      {budgetAlerts.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Budgets to watch</CardTitle>
+            <Link to="/budgets" className="text-xs text-primary hover:underline">
+              All budgets <ArrowRight className="inline size-3" />
+            </Link>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            {budgetAlerts.slice(0, 4).map((status) => {
+              const category = categories.find(
+                (candidate) => candidate.id === status.budget.categoryId,
+              );
+              return (
+                <div key={status.budget.id} className="grid gap-1.5">
+                  <div className="flex items-center gap-2 text-sm">
+                    <CategoryIcon icon={category?.icon} className="text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{category?.name}</span>
+                    <span
+                      className={
+                        status.state === 'exceeded' ? 'text-expense' : 'text-muted-foreground'
+                      }
+                    >
+                      <Money minor={status.spentMinor} /> /{' '}
+                      <Money minor={status.budget.limitMinor} />
+                    </span>
+                  </div>
+                  <Progress
+                    value={Math.min(100, Math.round(status.ratio * 100))}
+                    aria-label={`${category?.name} budget usage`}
+                    indicatorClassName={status.state === 'exceeded' ? 'bg-expense' : 'bg-chart-2'}
+                  />
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="mt-4 grid items-start gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Recent transactions</CardTitle>
+            <Link to="/transactions" className="text-xs text-primary hover:underline">
+              See all <ArrowRight className="inline size-3" />
+            </Link>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {recentTransactions.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                No transactions this month yet.
+              </p>
+            ) : (
+              <TransactionList transactions={recentTransactions} compact />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Upcoming recurring</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-2 pt-0">
+            {upcomingRecurring.length === 0 ? (
+              <p className="py-4 text-sm text-muted-foreground">Nothing scheduled.</p>
+            ) : (
+              upcomingRecurring.map((item) => (
+                <div key={item.id} className="flex items-center gap-2 text-sm">
+                  <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
+                    {format(item.nextOccurrence, 'MMM d')}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{item.description}</span>
+                  <Money
+                    minor={item.type === 'income' ? item.amountMinor : -item.amountMinor}
+                    signed
+                    tone="auto"
+                    className="text-xs"
+                  />
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </Page>
   );
 }

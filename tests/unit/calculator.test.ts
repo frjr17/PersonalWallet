@@ -1,74 +1,53 @@
 import { describe, expect, it } from 'vitest';
-import {
-  applyCalculatorKey,
-  CalculatorError,
-  evaluateCalculatorExpression,
-  normalizeCalculatorInput,
-} from '@/lib/calculator';
-import { parseMoney } from '@/lib/money';
+import { evaluateAmountExpression, isExpression } from '@/lib/calculator';
 
-describe('calculator', () => {
-  it('calculates decimal amounts without binary floating-point drift', () => {
-    expect(evaluateCalculatorExpression('0.10 + 0.20')).toBe('0.3');
-    expect(parseMoney(evaluateCalculatorExpression('0.10 + 0.20'))).toBe(30);
+describe('evaluateAmountExpression', () => {
+  it('evaluates plain amounts', () => {
+    expect(evaluateAmountExpression('12.50')).toBe(1250);
+    expect(evaluateAmountExpression('$1,000')).toBe(100000);
   });
 
-  it('applies normal operator precedence with keypad symbols', () => {
-    expect(evaluateCalculatorExpression('10 + 2 × 3')).toBe('16');
-    expect(evaluateCalculatorExpression('20 − 6 ÷ 4')).toBe('18.5');
+  it('adds and subtracts exactly in cents', () => {
+    expect(evaluateAmountExpression('10+2.50')).toBe(1250);
+    expect(evaluateAmountExpression('20-0.01')).toBe(1999);
+    expect(evaluateAmountExpression('1+2+3')).toBe(600);
+    expect(evaluateAmountExpression('0.10+0.20')).toBe(30);
   });
 
-  it('rounds a division once to a parseable cent value', () => {
-    expect(evaluateCalculatorExpression('10 ÷ 3')).toBe('3.33');
-    expect(evaluateCalculatorExpression('2 ÷ 3')).toBe('0.67');
+  it('applies × and ÷ before + and −', () => {
+    expect(evaluateAmountExpression('5+3×2')).toBe(1100);
+    expect(evaluateAmountExpression('10-6÷2')).toBe(700);
+    expect(evaluateAmountExpression('2×3+1')).toBe(700);
   });
 
-  it('reports division by zero in plain language', () => {
-    expect(() => evaluateCalculatorExpression('12 ÷ 0')).toThrow('Cannot divide by zero.');
+  it('rounds × and ÷ to the nearest cent', () => {
+    expect(evaluateAmountExpression('10÷3')).toBe(333);
+    expect(evaluateAmountExpression('0.10×0.10')).toBe(1);
+    expect(evaluateAmountExpression('99.99×3')).toBe(29997);
   });
 
-  it('rejects unfinished, non-positive, and unsafe results', () => {
-    expect(() => evaluateCalculatorExpression('12 +')).toThrow(
-      'Finish the calculation before using the result.',
-    );
-    expect(() => evaluateCalculatorExpression('10 − 10')).toThrow(
-      'The result must be greater than zero',
-    );
-    expect(() => evaluateCalculatorExpression('90071992547409.91 + 0.01')).toThrow(
-      'The result is too large',
-    );
+  it('accepts * / x aliases', () => {
+    expect(evaluateAmountExpression('4*2')).toBe(800);
+    expect(evaluateAmountExpression('8/2')).toBe(400);
+    expect(evaluateAmountExpression('4x2')).toBe(800);
   });
 
-  it('exposes stable error codes for calculator consumers', () => {
-    try {
-      evaluateCalculatorExpression('1 ÷ 0');
-      throw new Error('Expected the expression to fail');
-    } catch (error) {
-      expect(error).toBeInstanceOf(CalculatorError);
-      expect((error as CalculatorError).code).toBe('divide-by-zero');
-    }
+  it('rejects incomplete or invalid expressions', () => {
+    expect(evaluateAmountExpression('')).toBeNull();
+    expect(evaluateAmountExpression('5+')).toBeNull();
+    expect(evaluateAmountExpression('+5')).toBeNull();
+    expect(evaluateAmountExpression('5++2')).toBeNull();
+    expect(evaluateAmountExpression('abc')).toBeNull();
+    expect(evaluateAmountExpression('5÷0')).toBeNull();
   });
+});
 
-  it('builds keypad expressions while limiting each number to cents', () => {
-    let expression = '';
-    for (const key of ['1', '2', '.', '3', '4', '5', '+', '2'] as const) {
-      expression = applyCalculatorKey(expression, key);
-    }
-    expect(expression).toBe('12.34+2');
-    expect(applyCalculatorKey(expression, '=')).toBe('14.34');
-  });
-
-  it('supports operator replacement, backspace, and clear', () => {
-    expect(applyCalculatorKey('12+', '×')).toBe('12×');
-    expect(applyCalculatorKey('12.3', 'backspace')).toBe('12.');
-    expect(applyCalculatorKey('12.3', 'clear')).toBe('');
-  });
-
-  it('normalizes typed expressions and formatted pasted amounts', () => {
-    expect(normalizeCalculatorInput(' 1,234.50 + .25 ')).toBe('1234.50+0.25');
-    expect(normalizeCalculatorInput('12.50 x 2')).toBe('12.50×2');
-    expect(() => normalizeCalculatorInput('12.345')).toThrow(
-      'Enter numbers with no more than two decimal places.',
-    );
+describe('isExpression', () => {
+  it('detects operators but not plain amounts', () => {
+    expect(isExpression('5+2')).toBe(true);
+    expect(isExpression('5×2')).toBe(true);
+    expect(isExpression('10-2')).toBe(true);
+    expect(isExpression('12.50')).toBe(false);
+    expect(isExpression('$1,250')).toBe(false);
   });
 });

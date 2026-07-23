@@ -1,155 +1,267 @@
-import { format } from 'date-fns';
-import { Copy, Edit3, Plus, Search, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { toast } from 'sonner';
-import { CategoryIcon } from '@/components/categories/CategoryIcon';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { limit, onSnapshot, orderBy, query, Timestamp, where } from 'firebase/firestore';
+import { ArrowLeftRight, Plus, Search, X } from 'lucide-react';
 import { Page } from '@/components/layout/Page';
-import { Button } from '@/components/ui/Button';
-import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { useData } from '@/app/DataProvider';
-import { useAuth } from '@/features/authentication/AuthProvider';
-import { asDate } from '@/lib/dates';
-import { formatMoney } from '@/lib/money';
-import { deleteTransaction } from '@/services/repositories';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { logError } from '@/lib/errors';
+import type { Transaction } from '@/types/domain';
+import { useLedger } from '@/app/DataProvider';
+import { parseTransaction, transactionsCol } from '@/services/repositories';
+import { TransactionList } from '@/features/transactions/TransactionList';
+
+const PAGE_SIZE = 50;
+
+type SortOrder = 'date' | 'amount-desc' | 'amount-asc';
+
 export function TransactionsPage() {
-  const { transactions, categories, accounts } = useData(),
-    { user } = useAuth(),
-    [search, setSearch] = useState(''),
-    [type, setType] = useState('all');
-  const rows = useMemo(
-    () =>
-      transactions.filter(
-        (t) =>
-          (type === 'all' || t.type === type) &&
-          `${t.description} ${t.merchant ?? ''}`.toLowerCase().includes(search.toLowerCase()),
-      ),
-    [transactions, search, type],
-  );
+  const { uid, accounts, categories } = useLedger();
+  const navigate = useNavigate();
+
+  const [rows, setRows] = useState<Transaction[] | null>(null);
+  const [pageCount, setPageCount] = useState(1);
+  const [search, setSearch] = useState('');
+  const [accountId, setAccountId] = useState('all');
+  const [categoryId, setCategoryId] = useState('all');
+  const [type, setType] = useState('all');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [sort, setSort] = useState<SortOrder>('date');
+
+  // Server side: date range + incremental loading, one bounded live query.
+  // Everything else filters the loaded rows client-side.
+  useEffect(() => {
+    const clauses = [
+      ...(from ? [where('occurredAt', '>=', Timestamp.fromDate(new Date(`${from}T00:00`)))] : []),
+      ...(to ? [where('occurredAt', '<', Timestamp.fromDate(new Date(`${to}T24:00`)))] : []),
+      orderBy('occurredAt', 'desc'),
+      limit(PAGE_SIZE * pageCount),
+    ];
+    return onSnapshot(
+      query(transactionsCol(uid), ...clauses),
+      (snap) => setRows(snap.docs.map(parseTransaction)),
+      (error) => logError('transactions', error),
+    );
+  }, [uid, from, to, pageCount]);
+
+  const filtered = useMemo(() => {
+    if (!rows) return [];
+    const needle = search.trim().toLowerCase();
+    let result = rows.filter((txn) => {
+      if (type !== 'all' && txn.type !== type) return false;
+      if (accountId !== 'all' && txn.accountId !== accountId) return false;
+      if (categoryId !== 'all' && txn.categoryId !== categoryId) return false;
+      if (needle) {
+        const haystack = [txn.description, txn.merchant, txn.notes, ...txn.tags]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(needle)) return false;
+      }
+      return true;
+    });
+    if (sort !== 'date') {
+      result = [...result].sort((a, b) =>
+        sort === 'amount-desc' ? b.amountMinor - a.amountMinor : a.amountMinor - b.amountMinor,
+      );
+    }
+    return result;
+  }, [rows, search, accountId, categoryId, type, sort]);
+
+  const hasFilters =
+    search !== '' ||
+    accountId !== 'all' ||
+    categoryId !== 'all' ||
+    type !== 'all' ||
+    from !== '' ||
+    to !== '';
+  const hasMore = rows !== null && rows.length === PAGE_SIZE * pageCount;
+  const loading = rows === null;
+
+  function clearFilters() {
+    setSearch('');
+    setAccountId('all');
+    setCategoryId('all');
+    setType('all');
+    setFrom('');
+    setTo('');
+    setSort('date');
+  }
+
   return (
     <Page
-      eyebrow="Selected month"
       title="Transactions"
-      action={
-        <Button asChild>
-          <Link to="/transactions/new">
-            <Plus size={18} />
-            Add entry
-          </Link>
+      description="Every entry in your ledger."
+      actions={
+        <Button onClick={() => navigate('/transactions/new')}>
+          <Plus /> New transaction
         </Button>
       }
     >
-      <div className="mb-7 flex flex-col gap-3 border-b pb-5 sm:flex-row">
-        <label className="relative flex-1">
-          <span className="sr-only">Search transactions</span>
-          <Search className="absolute left-3 top-3 text-ink/40" size={19} />
-          <input
-            className="input pl-10"
-            placeholder="Search descriptions or merchants"
+      <div className="mb-4 grid gap-3 rounded-xl border bg-card p-4">
+        <div className="relative">
+          <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search description, merchant, notes, tags"
+            aria-label="Search transactions"
+            className="pl-9"
           />
-        </label>
-        <select
-          className="select sm:w-44"
-          aria-label="Transaction type"
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-        >
-          <option value="all">All types</option>
-          <option value="income">Income</option>
-          <option value="expense">Expense</option>
-          <option value="transfer">Transfers</option>
-        </select>
-      </div>
-      {rows.length ? (
-        <div className="overflow-x-auto border-y">
-          <table className="w-full min-w-[680px]">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase tracking-wider opacity-50">
-                <th className="p-4">Date</th>
-                <th>Description</th>
-                <th>Account</th>
-                <th>Category</th>
-                <th className="text-right">Amount</th>
-                <th className="p-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((t) => (
-                <tr key={t.id} className="border-b last:border-0">
-                  <td className="p-4 text-sm">{format(asDate(t.occurredAt), 'MMM d')}</td>
-                  <td>
-                    <p className="font-semibold">{t.description}</p>
-                    <span className="text-xs opacity-50">{t.type}</span>
-                  </td>
-                  <td>{accounts.find((a) => a.id === t.accountId)?.name}</td>
-                  <td>
-                    <span className="flex items-center gap-2">
-                      {t.categoryId && (
-                        <CategoryIcon
-                          icon={categories.find((c) => c.id === t.categoryId)?.icon}
-                          className="text-jade dark:text-[#67c7b5]"
-                          size={15}
-                        />
-                      )}
-                      {categories.find((c) => c.id === t.categoryId)?.name ?? 'Transfer'}
-                    </span>
-                  </td>
-                  <td
-                    className={`amount text-right font-semibold ${t.type === 'expense' ? 'text-apricot' : t.type === 'income' ? 'text-jade' : ''}`}
-                  >
-                    {t.type === 'expense' || t.transferRole === 'source' ? '-' : '+'}
-                    {formatMoney(t.amountMinor, t.currency)}
-                  </td>
-                  <td className="p-4">
-                    <div className="flex justify-end gap-1">
-                      {t.type !== 'transfer' && (
-                        <>
-                          <Button variant="ghost" asChild aria-label="Edit">
-                            <Link to={`/transactions/${t.id}/edit`}>
-                              <Edit3 size={16} />
-                            </Link>
-                          </Button>
-                          <Button variant="ghost" asChild aria-label="Duplicate">
-                            <Link to={`/transactions/new?duplicate=${t.id}`}>
-                              <Copy size={16} />
-                            </Link>
-                          </Button>
-                        </>
-                      )}
-                      <ConfirmDialog
-                        trigger={
-                          <Button variant="ghost" aria-label="Delete">
-                            <Trash2 size={16} />
-                          </Button>
-                        }
-                        title="Delete this entry?"
-                        description={
-                          t.type === 'transfer'
-                            ? 'Both linked transfer entries and balance effects will be removed.'
-                            : 'The account balance will be updated automatically.'
-                        }
-                        onConfirm={async () => {
-                          if (user) {
-                            await deleteTransaction(user.uid, t, transactions);
-                            toast.success('Transaction deleted');
-                          }
-                        }}
-                      />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
-      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid gap-1">
+            <Label htmlFor="filter-type" className="text-xs text-muted-foreground">
+              Type
+            </Label>
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger id="filter-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All types</SelectItem>
+                <SelectItem value="income">Income</SelectItem>
+                <SelectItem value="expense">Expense</SelectItem>
+                <SelectItem value="transfer">Transfer</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="filter-account" className="text-xs text-muted-foreground">
+              Account
+            </Label>
+            <Select value={accountId} onValueChange={setAccountId}>
+              <SelectTrigger id="filter-account">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All accounts</SelectItem>
+                {accounts.map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {account.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="filter-category" className="text-xs text-muted-foreground">
+              Category
+            </Label>
+            <Select value={categoryId} onValueChange={setCategoryId}>
+              <SelectTrigger id="filter-category">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All categories</SelectItem>
+                {categories.map((category) => (
+                  <SelectItem key={category.id} value={category.id}>
+                    {category.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="filter-from" className="text-xs text-muted-foreground">
+              From
+            </Label>
+            <Input
+              id="filter-from"
+              type="date"
+              value={from}
+              onChange={(event) => setFrom(event.target.value)}
+            />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="filter-to" className="text-xs text-muted-foreground">
+              To
+            </Label>
+            <Input
+              id="filter-to"
+              type="date"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+            />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="filter-sort" className="text-xs text-muted-foreground">
+              Sort
+            </Label>
+            <Select value={sort} onValueChange={(value) => setSort(value as SortOrder)}>
+              <SelectTrigger id="filter-sort">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date">Newest first</SelectItem>
+                <SelectItem value="amount-desc">Largest amount</SelectItem>
+                <SelectItem value="amount-asc">Smallest amount</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        {hasFilters && (
+          <div>
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              <X /> Clear filters
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="grid gap-2">
+          {Array.from({ length: 8 }, (_, index) => (
+            <Skeleton key={index} className="h-14" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
         <EmptyState
-          title="No matching entries"
-          detail="Change the filters or add a transaction for this month."
+          icon={ArrowLeftRight}
+          title={hasFilters ? 'Nothing matches these filters' : 'No transactions yet'}
+          description={
+            hasFilters
+              ? 'Loosen or clear the filters to see more of your ledger.'
+              : 'Record your first income or expense to start the ledger.'
+          }
+          action={
+            hasFilters ? (
+              <Button variant="outline" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            ) : (
+              <Button onClick={() => navigate('/transactions/new')}>
+                <Plus /> New transaction
+              </Button>
+            )
+          }
         />
+      ) : (
+        <>
+          <TransactionList
+            transactions={filtered}
+            flatLabel={sort === 'date' ? undefined : 'Sorted by amount'}
+          />
+          {hasMore && (
+            <div className="mt-6 text-center">
+              <Button variant="outline" onClick={() => setPageCount((count) => count + 1)}>
+                Load more
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </Page>
   );

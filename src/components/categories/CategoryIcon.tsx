@@ -1,70 +1,45 @@
 import {
-  Baby,
-  Banknote,
-  BriefcaseBusiness,
-  Car,
+  Briefcase,
+  Bus,
   Clapperboard,
-  CreditCard,
-  Dumbbell,
+  CircleDollarSign,
   Gift,
   GraduationCap,
   HeartPulse,
-  House,
-  PawPrint,
-  PiggyBank,
-  Plane,
-  ReceiptText,
-  Repeat2,
-  RotateCcw,
-  Shapes,
-  ShieldCheck,
-  ShoppingBag,
+  Home,
+  Laptop,
+  Percent,
+  Plug,
+  RefreshCcw,
   ShoppingCart,
   Sparkles,
-  Utensils,
-  Zap,
-  type LucideIcon,
+  Undo2,
+  UtensilsCrossed,
 } from 'lucide-react';
-import { normalizeCategoryIcon, type CategoryIconId } from '@/lib/categoryIcons';
+import { cn } from '@/lib/utils';
 
-const categoryIconComponents: Readonly<Record<CategoryIconId, LucideIcon>> = {
-  general: Shapes,
-  home: House,
+const icons: Record<string, React.ComponentType<{ className?: string }>> = {
+  housing: Home,
   groceries: ShoppingCart,
-  dining: Utensils,
-  transport: Car,
-  utilities: Zap,
+  restaurants: UtensilsCrossed,
+  transportation: Bus,
+  utilities: Plug,
   health: HeartPulse,
   education: GraduationCap,
   entertainment: Clapperboard,
-  subscriptions: Repeat2,
+  subscriptions: RefreshCcw,
   'personal-care': Sparkles,
-  gift: Gift,
-  salary: Banknote,
-  freelance: BriefcaseBusiness,
-  interest: PiggyBank,
-  refund: RotateCcw,
-  shopping: ShoppingBag,
-  travel: Plane,
-  pets: PawPrint,
-  insurance: ShieldCheck,
-  taxes: ReceiptText,
-  debt: CreditCard,
-  childcare: Baby,
-  sports: Dumbbell,
+  gifts: Gift,
+  salary: Briefcase,
+  freelance: Laptop,
+  interest: Percent,
+  refund: Undo2,
+  other: CircleDollarSign,
 };
 
-export function CategoryIcon({
-  icon,
-  size = 18,
-  strokeWidth = 1.8,
-  className,
-}: {
-  icon?: unknown;
-  size?: number;
-  strokeWidth?: number;
-  className?: string;
-}) {
-  const Icon = categoryIconComponents[normalizeCategoryIcon(icon)];
-  return <Icon aria-hidden="true" className={className} size={size} strokeWidth={strokeWidth} />;
+export const categoryIconNames = Object.keys(icons);
+
+export function CategoryIcon({ icon, className }: { icon?: string; className?: string }) {
+  const Icon = icons[icon ?? 'other'] ?? CircleDollarSign;
+  return <Icon className={cn('size-4', className)} aria-hidden="true" />;
 }

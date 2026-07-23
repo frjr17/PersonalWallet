@@ -1,121 +1,337 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { limit, onSnapshot, orderBy, query, Timestamp, where } from 'firebase/firestore';
 import { format } from 'date-fns';
-import { Link, useParams } from 'react-router-dom';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Pencil,
+  Plus,
+  Scale,
+  Search,
+  Trash2,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { Page } from '@/components/layout/Page';
-import { Button } from '@/components/ui/Button';
-import { useData } from '@/app/DataProvider';
-import { asDate } from '@/lib/dates';
-import { formatMoney } from '@/lib/money';
-import { accountBalanceView } from '@/services/finance';
-import { accountTransactionPresentation } from './accountPresentation';
+import { Money } from '@/components/money';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  ChartTooltip,
+  axisDefaults,
+  gridDefaults,
+  moneyTick,
+} from '@/components/charts/chart-theme';
+import { logError, userMessage } from '@/lib/errors';
+import type { Transaction } from '@/types/domain';
+import { useLedger } from '@/app/DataProvider';
+import { parseTransaction, setAccountArchived, transactionsCol } from '@/services/repositories';
+import { legEffect } from '@/lib/ledger';
+import { accountTypeMeta } from '@/features/accounts/accountMeta';
+import { AccountFormDialog } from '@/features/accounts/AccountForm';
+import { AdjustBalanceDialog } from '@/features/accounts/AdjustBalanceDialog';
+import { DeleteAccountDialog } from '@/features/accounts/DeleteAccountDialog';
+import { CreditFacts } from '@/features/accounts/AccountsPage';
+import { TransactionList } from '@/features/transactions/TransactionList';
+
+const PAGE_SIZE = 50;
+
 export function AccountDetailPage() {
-  const { accountId } = useParams(),
-    { accounts, transactions } = useData();
-  const account = accounts.find((a) => a.id === accountId);
-  if (!account)
+  const { accountId = '' } = useParams();
+  const navigate = useNavigate();
+  const { uid, accounts, loading } = useLedger();
+  const account = accounts.find((candidate) => candidate.id === accountId);
+
+  const [rows, setRows] = useState<Transaction[] | null>(null);
+  const [pageCount, setPageCount] = useState(1);
+  const [search, setSearch] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  useEffect(() => {
+    if (!accountId) return;
+    const clauses = [
+      where('accountId', '==', accountId),
+      ...(from ? [where('occurredAt', '>=', Timestamp.fromDate(new Date(`${from}T00:00`)))] : []),
+      ...(to ? [where('occurredAt', '<', Timestamp.fromDate(new Date(`${to}T24:00`)))] : []),
+      orderBy('occurredAt', 'desc'),
+      limit(PAGE_SIZE * pageCount),
+    ];
+    return onSnapshot(
+      query(transactionsCol(uid), ...clauses),
+      (snap) => setRows(snap.docs.map(parseTransaction)),
+      (error) => logError('account-detail', error),
+    );
+  }, [uid, accountId, from, to, pageCount]);
+
+  const filtered = useMemo(() => {
+    if (!rows) return [];
+    const needle = search.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((txn) =>
+      [txn.description, txn.merchant, txn.notes, ...txn.tags]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [rows, search]);
+
+  // Balance trend over the loaded (unfiltered) history, walked back from the
+  // current balance. Hidden while date filters narrow the window.
+  const trend = useMemo(() => {
+    if (!rows || !account || from || to) return [];
+    let running = account.currentBalanceMinor;
+    const points = rows.map((txn) => {
+      const point = { date: format(txn.occurredAt, 'MMM d'), balance: running };
+      running -= legEffect(txn);
+      return point;
+    });
+    points.push({ date: 'Start', balance: running });
+    return points.reverse();
+  }, [rows, account, from, to]);
+
+  async function toggleArchived() {
+    if (!account) return;
+    try {
+      await setAccountArchived(uid, account, !account.archived);
+      toast.success(account.archived ? 'Account restored' : 'Account archived');
+    } catch (error) {
+      logError('accounts', error);
+      toast.error(userMessage(error));
+    }
+  }
+
+  if (loading) {
     return (
-      <Page title="Account not found">
-        <p>The account may be archived or unavailable.</p>
+      <Page title="Account">
+        <Skeleton className="h-40" />
       </Page>
     );
-  const rows = transactions.filter((t) => t.accountId === account.id);
-  const balance = accountBalanceView(account);
+  }
+
+  if (!account) {
+    return (
+      <Page title="Account not found">
+        <EmptyState
+          title="This account does not exist"
+          description="It may have been removed. Head back to your accounts."
+          action={
+            <Button onClick={() => navigate('/accounts')}>
+              <ArrowLeft /> All accounts
+            </Button>
+          }
+        />
+      </Page>
+    );
+  }
+
+  const meta = accountTypeMeta[account.type];
+  const hasMore = rows !== null && rows.length === PAGE_SIZE * pageCount;
+
   return (
     <Page
-      eyebrow={account.type}
       title={account.name}
-      action={
-        <Button asChild>
-          <Link to="/transactions/new">Add entry</Link>
-        </Button>
+      description={meta.label}
+      actions={
+        <>
+          <Button
+            variant="outline"
+            onClick={() => navigate(`/transactions/new?account=${account.id}`)}
+            disabled={account.archived}
+          >
+            <Plus /> Add transaction
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Edit account"
+            onClick={() => setEditOpen(true)}
+          >
+            <Pencil />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Adjust balance"
+            onClick={() => setAdjustOpen(true)}
+          >
+            <Scale />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={account.archived ? 'Restore account' : 'Archive account'}
+            onClick={() => void toggleArchived()}
+          >
+            {account.archived ? <ArchiveRestore /> : <Archive />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Delete account"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 />
+          </Button>
+        </>
       }
     >
-      <section
-        aria-labelledby="account-balance-heading"
-        className="border-y py-6 lg:grid lg:grid-cols-[minmax(16rem,.7fr)_minmax(0,1.3fr)] lg:gap-10"
-      >
-        <div>
-          <h2 id="account-balance-heading" className="text-sm text-ink/60 dark:text-white/60">
-            {balance.label}
-          </h2>
-          <p className="amount mt-2 text-4xl font-semibold">
-            {formatMoney(balance.primaryMinor, account.currency)}
-          </p>
-        </div>
-        <div className="mt-6 border-t pt-5 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-10 lg:pt-0">
-          {account.type === 'credit-card' ? (
-            <div className="grid gap-5 text-sm sm:grid-cols-2">
-              <div>
-                <p className="text-ink/60 dark:text-white/60">Available credit</p>
-                <p className="amount mt-1 text-lg font-semibold">
-                  {balance.availableMinor === undefined
-                    ? 'Not set'
-                    : formatMoney(balance.availableMinor, account.currency)}
-                </p>
-              </div>
-              <div>
-                <p className="text-ink/60 dark:text-white/60">Credit limit</p>
-                <p className="amount mt-1 text-lg font-semibold">
-                  {account.creditLimitMinor === undefined
-                    ? 'Not set'
-                    : formatMoney(account.creditLimitMinor, account.currency)}
-                </p>
-              </div>
-              <p className="text-sm text-ink/55 dark:text-white/55 sm:col-span-2">
-                Expenses increase the amount owed. Transfers into this card are payments.
+      {account.archived && (
+        <Badge variant="secondary" className="mb-4">
+          Archived — history stays, new transactions are blocked
+        </Badge>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardContent className="py-4">
+            <p className="text-xs font-medium text-muted-foreground">Current balance</p>
+            <Money
+              minor={account.currentBalanceMinor}
+              tone={account.currentBalanceMinor < 0 ? 'expense' : 'neutral'}
+              className="mt-1 block text-3xl font-semibold"
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              Opened at <Money minor={account.openingBalanceMinor} className="text-xs" />
+            </p>
+            <CreditFacts account={account} className="mt-3" />
+          </CardContent>
+        </Card>
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Balance trend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {trend.length < 2 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {from || to
+                  ? 'The trend hides while date filters are active.'
+                  : 'The trend appears after the first transactions.'}
               </p>
+            ) : (
+              <div className="h-44">
+                <ResponsiveContainer>
+                  <LineChart data={trend} margin={{ top: 4, right: 8 }}>
+                    <CartesianGrid {...gridDefaults} />
+                    <XAxis dataKey="date" {...axisDefaults} minTickGap={32} />
+                    <YAxis
+                      {...axisDefaults}
+                      tickFormatter={moneyTick}
+                      width={56}
+                      domain={['auto', 'auto']}
+                    />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Line
+                      type="monotone"
+                      dataKey="balance"
+                      name="Balance"
+                      stroke="var(--primary)"
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>History</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <div className="mb-3 grid gap-3 sm:grid-cols-3">
+            <div className="relative sm:col-span-1">
+              <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search history"
+                aria-label="Search this account's history"
+                className="pl-9"
+              />
             </div>
+            <div className="grid gap-1">
+              <Label htmlFor="detail-from" className="sr-only">
+                From date
+              </Label>
+              <Input
+                id="detail-from"
+                type="date"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+                aria-label="From date"
+              />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="detail-to" className="sr-only">
+                To date
+              </Label>
+              <Input
+                id="detail-to"
+                type="date"
+                value={to}
+                onChange={(event) => setTo(event.target.value)}
+                aria-label="To date"
+              />
+            </div>
+          </div>
+          {rows === null ? (
+            <div className="grid gap-2">
+              {Array.from({ length: 5 }, (_, index) => (
+                <Skeleton key={index} className="h-12" />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No transactions match here yet.
+            </p>
           ) : (
-            <div>
-              <p className="text-sm text-ink/60 dark:text-white/60">Opening balance</p>
-              <p className="amount mt-1 text-lg font-semibold">
-                {formatMoney(account.openingBalanceMinor, account.currency)}
-              </p>
-            </div>
-          )}
-        </div>
-      </section>
-      <section aria-labelledby="account-activity-heading" className="mt-9">
-        <h2 id="account-activity-heading" className="font-display text-lg">
-          This month
-        </h2>
-        <div className="mt-3 border-y divide-y">
-          {rows.map((transaction) => {
-            const presentation = accountTransactionPresentation(account.type, transaction);
-            return (
-              <div className="flex items-start justify-between gap-4 py-4" key={transaction.id}>
-                <div className="min-w-0">
-                  <p className="truncate font-semibold">{transaction.description}</p>
-                  <p className="mt-0.5 text-sm opacity-55">
-                    {format(asDate(transaction.occurredAt), 'MMM d, yyyy')} · {presentation.label}
-                  </p>
-                  {presentation.explanation && (
-                    <p className="mt-0.5 text-xs text-ink/50 dark:text-white/50">
-                      {presentation.explanation}
-                    </p>
-                  )}
+            <>
+              <TransactionList transactions={filtered} showAccount={false} />
+              {hasMore && (
+                <div className="mt-4 text-center">
+                  <Button variant="outline" onClick={() => setPageCount((count) => count + 1)}>
+                    Load more
+                  </Button>
                 </div>
-                <p
-                  className="amount shrink-0 text-right"
-                  aria-label={`${presentation.label}: ${presentation.accessibleAmountEffect} ${formatMoney(transaction.amountMinor, transaction.currency)}`}
-                >
-                  <span className="block">
-                    {presentation.sign}
-                    {formatMoney(transaction.amountMinor, transaction.currency)}
-                  </span>
-                  {account.type === 'credit-card' && (
-                    <span className="mt-0.5 block font-sans text-xs font-normal opacity-55">
-                      amount owed
-                    </span>
-                  )}
-                </p>
-              </div>
-            );
-          })}
-          {!rows.length && (
-            <p className="py-8 text-center opacity-60">No entries in the selected month.</p>
+              )}
+            </>
           )}
-        </div>
-      </section>
+        </CardContent>
+      </Card>
+
+      <AccountFormDialog account={account} open={editOpen} onOpenChange={setEditOpen} />
+      <AdjustBalanceDialog account={account} open={adjustOpen} onOpenChange={setAdjustOpen} />
+      <DeleteAccountDialog
+        account={account}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={() => navigate('/accounts')}
+      />
     </Page>
   );
 }

@@ -1,95 +1,165 @@
-@import '@fontsource-variable/source-sans-3';
-@import '@fontsource/ibm-plex-mono/400.css';
-@import '@fontsource/ibm-plex-mono/600.css';
-@import '@fontsource/sora/600.css';
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/instrument-sans';
+@import '@fontsource-variable/spline-sans-mono';
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Stone paper + warm ink + ledger green. Money follows bookkeeping ink:
+     income in the green, expenses in the red, transfers stay neutral. */
+  --background: #faf9f7;
+  --foreground: #1c1917;
+  --card: #ffffff;
+  --card-foreground: #1c1917;
+  --popover: #ffffff;
+  --popover-foreground: #1c1917;
+  --primary: #17614a;
+  --primary-foreground: #f4fbf8;
+  --secondary: #f1efec;
+  --secondary-foreground: #1c1917;
+  --muted: #f1efec;
+  --muted-foreground: #78716c;
+  --accent: #eaf3ee;
+  --accent-foreground: #14523f;
+  --destructive: #b42318;
+  --destructive-foreground: #fef2f1;
+  --border: #e6e3de;
+  --input: #dcd8d2;
+  --ring: #17614a;
+  --income: #177245;
+  --expense: #b42318;
+  --transfer: #6b7280;
+  --radius: 0.625rem;
+  /* Chart palettes are CVD-validated (dataviz six checks) — don't eyeball edits. */
+  --chart-1: #15803d;
+  --chart-2: #d97706;
+  --chart-3: #2563eb;
+  --chart-4: #db2777;
+  --chart-5: #7c3aed;
+  --chart-income: #177245;
+  --chart-expense: #b42318;
+  --chart-other: #78716c;
+}
+
+/* True black, per the owner's preference: pure #000 canvas, near-black cards. */
+.dark {
+  --background: #000000;
+  --foreground: #ececea;
+  --card: #0e0d0c;
+  --card-foreground: #ececea;
+  --popover: #12110f;
+  --popover-foreground: #ececea;
+  --primary: #3fbf8f;
+  --primary-foreground: #0b2a1f;
+  --secondary: #1a1816;
+  --secondary-foreground: #ececea;
+  --muted: #1a1816;
+  --muted-foreground: #a8a29e;
+  --accent: #14231c;
+  --accent-foreground: #7cd8b5;
+  --destructive: #f0665a;
+  --destructive-foreground: #2a0e0b;
+  --border: #24211e;
+  --input: #302c28;
+  --ring: #3fbf8f;
+  --income: #4cc38a;
+  --expense: #f0665a;
+  --transfer: #9ca3af;
+  --chart-1: #25a05f;
+  --chart-2: #c8811c;
+  --chart-3: #4f83ec;
+  --chart-4: #d8548f;
+  --chart-5: #9a6cf0;
+  --chart-income: #2ca06c;
+  --chart-expense: #e0685c;
+  --chart-other: #a8a29e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-income: var(--income);
+  --color-expense: var(--expense);
+  --color-transfer: var(--transfer);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-income: var(--chart-income);
+  --color-chart-expense: var(--chart-expense);
+  --color-chart-other: var(--chart-other);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: 'Instrument Sans Variable', system-ui, sans-serif;
+  --font-display: 'Bricolage Grotesque Variable', 'Instrument Sans Variable', sans-serif;
+  --font-mono: 'Spline Sans Mono Variable', ui-monospace, monospace;
+}
+
 @layer base {
-  :root {
-    color-scheme: light;
-    background: #f7f2e8;
-  }
-  .dark {
-    color-scheme: dark;
-    background: #050605;
-  }
   * {
-    border-color: rgb(32 48 44 / 0.13);
+    border-color: var(--color-border);
+    outline-color: color-mix(in oklab, var(--color-ring) 50%, transparent);
   }
-  .dark * {
-    border-color: rgb(255 255 255 / 0.12);
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
   }
   body {
-    @apply m-0 min-h-screen bg-oat font-sans text-ink antialiased dark:bg-[#050605] dark:text-[#f2f4f1];
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
   }
-  button,
-  input,
-  select,
-  textarea {
-    @apply outline-none;
+  /* Amounts, dates and other tabular data always read as ledger entries. */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
   }
-  :focus-visible {
-    @apply ring-2 ring-jade ring-offset-2 ring-offset-oat;
+  /* Native date pickers, dressed to match the ledger. */
+  input[type='date'],
+  input[type='datetime-local'] {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
-  .dark :focus-visible {
-    --tw-ring-color: #67c7b5;
-    --tw-ring-offset-color: #050605;
+  input[type='date']::-webkit-calendar-picker-indicator,
+  input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
   }
-  ::selection {
-    background: rgb(23 107 91 / 0.28);
+  .dark input[type='date']::-webkit-calendar-picker-indicator,
+  .dark input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
   }
-  .dark ::selection {
-    background: rgb(103 199 181 / 0.3);
-  }
-}
-@layer components {
-  .card {
-    @apply rounded-2xl bg-white/55 p-5 dark:bg-white/[.045];
-  }
-  .label {
-    @apply mb-1.5 block text-sm font-semibold;
-  }
-  .input {
-    @apply h-11 w-full rounded-xl border bg-white/80 px-3 text-base dark:border-white/15 dark:bg-[#191d1b] dark:text-[#f2f4f1] dark:placeholder:text-white/40;
-  }
-  .select {
-    @apply input appearance-none;
-  }
-  .amount {
-    @apply font-mono tabular-nums tracking-tight;
-  }
-  .eyebrow {
-    @apply font-mono text-[.68rem] uppercase tracking-[.18em] text-ink/55 dark:text-white/55;
-  }
-  .dark .text-jade {
-    color: #67c7b5;
-  }
-  .dark .text-ink\/60 {
-    color: rgb(242 244 241 / 0.62);
-  }
-  .dark .text-ink\/40 {
-    color: rgb(242 244 241 / 0.45);
-  }
-  .dark .bg-mist,
-  .dark .bg-mist\/60,
-  .dark .bg-mist\/55 {
-    background-color: #17201c;
-  }
-  .dark .bg-apricot {
-    color: #24130d;
-  }
-  .dark [class~='bg-[#f1d19b]'] {
-    background-color: #d8ad57;
-    color: #241b09;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
