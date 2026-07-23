@@ -1,5 +1,6 @@
 import { addMonths, format, isSameDay, startOfMonth } from 'date-fns';
-import { ChevronLeft, ChevronRight, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import {
   Bar,
   BarChart,
@@ -38,6 +39,12 @@ export function DashboardPage() {
     { name: 'Expenses', value: metrics.expenses },
   ];
   const current = accounts.reduce((n, a) => n + a.currentBalanceMinor, 0);
+  const visibleAccounts = accounts.slice(0, 3);
+  const topCategory = byCategory.reduce<(typeof byCategory)[number] | undefined>(
+    (largest, item) => (!largest || item.value > largest.value ? item : largest),
+    undefined,
+  );
+
   return (
     <Page
       eyebrow="Monthly ledger"
@@ -61,8 +68,40 @@ export function DashboardPage() {
         </div>
       }
     >
-      <section className="mb-9 overflow-hidden rounded-2xl bg-jade text-white">
-        <div className="grid gap-px bg-white/15 sm:grid-cols-4">
+      <section className="mb-8 space-y-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="font-display text-2xl">List of accounts</h2>
+            <p className="mt-1 text-sm opacity-60">Quickly scan balances before opening details.</p>
+          </div>
+          <Button asChild variant="secondary" className="w-full sm:w-auto">
+            <Link to="/accounts">Account detail</Link>
+          </Button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {visibleAccounts.map((account, index) => (
+            <Link
+              key={account.id}
+              to={`/accounts/${account.id}`}
+              className={`min-h-24 rounded-2xl p-4 text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                index === 0 ? 'bg-apricot' : 'bg-ink/55 dark:bg-white/15'
+              }`}
+            >
+              <p className="truncate text-lg font-semibold">{account.name}</p>
+              <p className="amount mt-1 text-2xl font-semibold">
+                {formatMoney(account.currentBalanceMinor, account.currency)}
+              </p>
+            </Link>
+          ))}
+          <Link
+            to="/accounts"
+            className="flex min-h-24 items-center justify-between rounded-2xl border-2 border-jade/55 p-4 text-jade transition hover:bg-jade/10 dark:text-[#75cbb9]"
+          >
+            <span className="text-xl font-semibold">Add account</span>
+            <Plus className="rounded-full bg-jade text-white" size={28} />
+          </Link>
+        </div>
+        <div className="grid gap-3 rounded-3xl bg-ink/[.035] p-3 dark:bg-white/[.045] sm:grid-cols-4">
           <Summary
             label="Current balance"
             value={formatMoney(current, currency)}
@@ -84,22 +123,13 @@ export function DashboardPage() {
             icon={<span className="font-mono">{metrics.savingsRate}%</span>}
           />
         </div>
-        <div className="flex h-12 items-end gap-1 px-6" aria-hidden>
-          {Array.from({ length: 31 }, (_, i) => (
-            <span
-              key={i}
-              className="min-h-1 flex-1 rounded-t bg-oat/35"
-              style={{ height: `${15 + ((i * 17 + transactions.length * 7) % 70)}%` }}
-            />
-          ))}
-        </div>
       </section>
       {loading ? (
         <div className="animate-pulse border-y py-8">Loading your month…</div>
       ) : (
-        <div className="grid gap-10 xl:grid-cols-[1.15fr_.85fr]">
-          <div className="space-y-10">
-            <section className="border-t pt-5">
+        <div className="grid gap-6 xl:grid-cols-[1.15fr_.85fr]">
+          <div className="space-y-6">
+            <section className="card">
               <h2 className="font-display text-lg">Income and expenses</h2>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
@@ -117,7 +147,7 @@ export function DashboardPage() {
                 </ResponsiveContainer>
               </div>
             </section>
-            <section className="border-t pt-5">
+            <section className="card">
               <h2 className="font-display text-lg">Recent transactions</h2>
               <div className="mt-3 divide-y">
                 {transactions.slice(0, 7).map((t) => (
@@ -151,11 +181,22 @@ export function DashboardPage() {
               </div>
             </section>
           </div>
-          <div className="space-y-10">
-            <section className="border-t pt-5">
-              <h2 className="font-display text-lg">Spending by category</h2>
+          <div className="space-y-6">
+            <section className="card relative overflow-hidden">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="font-display text-2xl">Expenses structure</h2>
+                  <p className="eyebrow mt-4">Last 30 days</p>
+                  <p className="amount mt-1 text-4xl font-semibold">
+                    {formatMoney(metrics.expenses, currency)}
+                  </p>
+                </div>
+                <Button asChild variant="secondary" className="rounded-full">
+                  <Link to="/reports">Go deeper</Link>
+                </Button>
+              </div>
               {byCategory.length ? (
-                <div className="h-64">
+                <div className="relative h-72">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -176,12 +217,19 @@ export function DashboardPage() {
                       <Tooltip formatter={(v) => formatMoney(Number(v), currency)} />
                     </PieChart>
                   </ResponsiveContainer>
+                  {topCategory && (
+                    <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
+                      <p className="max-w-28 text-lg font-semibold leading-tight">
+                        {topCategory.name}
+                      </p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="py-12 text-center opacity-60">Spending will appear here.</p>
               )}
             </section>
-            <section className="border-t pt-5">
+            <section className="card">
               <h2 className="font-display text-lg">Budget watch</h2>
               <div className="mt-4 space-y-4">
                 {budgets.map((b) => {
@@ -214,7 +262,7 @@ export function DashboardPage() {
                 {!budgets.length && <p className="opacity-60">No budgets set for this month.</p>}
               </div>
             </section>
-            <section className="border-t pt-5">
+            <section className="card">
               <h2 className="font-display text-lg">Coming up</h2>
               <div className="mt-3">
                 {recurring
@@ -235,17 +283,29 @@ export function DashboardPage() {
           </div>
         </div>
       )}
+      <Button
+        asChild
+        className="fixed bottom-24 right-5 z-20 size-16 rounded-2xl p-0 shadow-xl lg:hidden"
+        aria-label="Add transaction"
+      >
+        <Link to="/transactions/new">
+          <Plus size={32} />
+        </Link>
+      </Button>
     </Page>
   );
 }
+
 function Summary({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
   return (
-    <div className="bg-jade p-5">
-      <div className="mb-5 flex items-center justify-between text-oat/60">
-        <span className="eyebrow !text-oat/60">{label}</span>
-        {icon}
+    <div className="rounded-2xl bg-white/60 p-4 dark:bg-white/[.06]">
+      <div className="mb-3 flex items-center justify-between gap-3 text-sm opacity-70">
+        <span>{label}</span>
+        <span className="grid size-8 place-items-center rounded-full bg-jade/10 text-jade dark:text-[#75cbb9]">
+          {icon}
+        </span>
       </div>
-      <p className="amount text-xl font-semibold sm:text-2xl">{value}</p>
+      <p className="amount text-xl font-semibold">{value}</p>
     </div>
   );
 }
